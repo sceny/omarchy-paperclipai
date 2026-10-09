@@ -1,3 +1,5 @@
 .rig-evidence/
 .claude/settings.local.json
 __pycache__/
+# Local agent links into skills/. omarchy plugin add refuses symlinks in a plugin folder.
+.claude/skills/

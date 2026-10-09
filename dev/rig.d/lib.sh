@@ -783,13 +783,23 @@ rig_build_package_repo() {
   rm -rf "$RIG_PKG_REPO"
   mkdir -p "$RIG_PKG_REPO"
   local path
-  for path in "${RIG_PACKAGE_PATHS[@]}"; do
-    if [[ -e "$RIG_PLUGIN_SRC_ABS/$path" ]]; then
-      cp -r "$RIG_PLUGIN_SRC_ABS/$path" "$RIG_PKG_REPO/"
-    else
-      rig_warn "package path missing in checkout, skipped: $path"
-    fi
-  done
+  if git -C "$RIG_PLUGIN_SRC_ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # In a git checkout the package is what the repo ships: every tracked or
+    # not-ignored file, symlinks kept as symlinks. A hand-picked list hid a
+    # symlink that `omarchy plugin add` refuses; this cannot.
+    git -C "$RIG_PLUGIN_SRC_ABS" ls-files -z --cached --others --exclude-standard |
+      tar -C "$RIG_PLUGIN_SRC_ABS" --null --ignore-failed-read -T - -cf - 2>/dev/null |
+      tar -C "$RIG_PKG_REPO" -xf - ||
+      rig_die "could not copy the git-tracked tree of $RIG_PLUGIN_SRC_ABS"
+  else
+    for path in "${RIG_PACKAGE_PATHS[@]}"; do
+      if [[ -e "$RIG_PLUGIN_SRC_ABS/$path" ]]; then
+        cp -r "$RIG_PLUGIN_SRC_ABS/$path" "$RIG_PKG_REPO/"
+      else
+        rig_warn "package path missing in checkout, skipped: $path"
+      fi
+    done
+  fi
   [[ -f $RIG_PKG_REPO/manifest.json ]] ||
     rig_die "no manifest.json in the package built from $RIG_PLUGIN_SRC_ABS"
 
