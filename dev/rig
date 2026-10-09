@@ -1,0 +1,420 @@
+#!/bin/bash
+# Isolated test rig for Sceny's Omarchy shell plugins.
+#
+# Usage:
+#   dev/rig up [--nested|--headless]     bring the rig up and leave it running
+#   dev/rig down                         tear it down and prove nothing is left
+#   dev/rig ci [--nested|--headless]     up, run every check, tear down (one command)
+#   dev/rig check                        run the checks against a running rig
+#   dev/rig status                       what is running, and where
+#   dev/rig screenshot [file.png]        capture the nested shell
+#   dev/rig seed                         one inbox row of each kind in the throwaway instance
+#   dev/rig restart-shell                restart only the nested shell (after a .js change)
+#   dev/rig logs [shell|compositor|instance|stubs]
+#   dev/rig exec -- <command...>         run a command inside the rig sandbox
+#   dev/rig verify-clean                 teardown proof for the last session
+#
+# What it guarantees, and why it exists:
+#
+#   * The Omarchy shell under test runs in its OWN nested compositor. The
+#     owner's Hyprland session, bar and shell are never restarted, reloaded or
+#     reconfigured.
+#   * The shell under test has its own HOME, its own XDG directories and its
+#     own XDG_RUNTIME_DIR. It installs the plugin into a throwaway
+#     ~/.config/omarchy/plugins, never the owner's.
+#   * Paperclip under test is a throwaway instance on its own port with its own
+#     data directory. The owner's instance is never started, stopped, migrated
+#     or written to.
+#   * The sandbox has no session bus, so the plugin cannot reach the owner's
+#     systemd user units.
+#
+# See README.md ("Testing the plugin") for the walkthrough, and dev/rig.conf
+# for the per-plugin settings a second plugin repo changes.
+
+set -uo pipefail
+
+RIG_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+# shellcheck source=rig.conf
+source "$RIG_DIR/rig.conf"
+
+RIG_PLUGIN_SRC_ABS=$(cd -- "$RIG_DIR/$RIG_PLUGIN_SRC" && pwd) ||
+  {
+    echo "dev/rig: RIG_PLUGIN_SRC ($RIG_PLUGIN_SRC) does not resolve" >&2
+    exit 1
+  }
+RIG_DEFAULT_INSTANCE_ID=rig
+
+# shellcheck source=rig.d/lib.sh
+source "$RIG_DIR/rig.d/lib.sh"
+# shellcheck source=rig.d/checks.sh
+source "$RIG_DIR/rig.d/checks.sh"
+if ((RIG_NEEDS_PAPERCLIP)); then
+  # shellcheck source=rig.d/paperclip.sh
+  source "$RIG_DIR/rig.d/paperclip.sh"
+fi
+
+# ------------------------------------------------------------------ usage ----
+
+rig_usage() {
+  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# ------------------------------------------------------- dependency check ----
+
+rig_require_tools() {
+  local missing=() tool
+  for tool in Hyprland quickshell qs omarchy hyprctl grim jq curl git python3 ss; do
+    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+  done
+  if ((${#missing[@]})); then
+    rig_die "missing tools: ${missing[*]}"
+  fi
+  ((RIG_NEEDS_PAPERCLIP)) || return 0
+  rig_pc_cli >/dev/null 2>&1 ||
+    rig_die "no Paperclip CLI found; install it or set RIG_PAPERCLIP_CLI=<path>"
+}
+
+# --------------------------------------------------------------- mode pick ----
+
+rig_pick_mode() {
+  # Nested when there is a session to nest inside, headless otherwise. CI gets
+  # headless without having to know it is CI.
+  local requested=${1:-auto}
+  case $requested in
+  nested | headless) RIG_MODE=$requested ;;
+  auto)
+    if [[ -n $RIG_HOST_WAYLAND_DISPLAY ]]; then RIG_MODE=nested; else RIG_MODE=headless; fi
+    ;;
+  *) rig_die "unknown mode: $requested" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------- up ----
+
+RIG_UP_SUCCEEDED=0
+
+rig_up_cleanup_on_failure() {
+  ((RIG_UP_SUCCEEDED)) && return 0
+  rig_warn "bringing the rig up failed — tearing down what started"
+  rig_teardown
+}
+
+cmd_up() {
+  local mode=auto
+  while (($#)); do
+    case $1 in
+    --nested) mode=nested ;;
+    --headless) mode=headless ;;
+    *) rig_die "up: unknown option $1" ;;
+    esac
+    shift
+  done
+
+  if rig_session_dir >/dev/null 2>&1; then
+    rig_die "a rig session is already up at $(rig_session_dir); run 'dev/rig down' first"
+  fi
+
+  rig_require_tools
+  rig_pick_mode "$mode"
+
+  local session
+  session=$(rig_new_session_dir)
+  rig_define_paths "$session"
+
+  RIG_INSTANCE_ID=$RIG_DEFAULT_INSTANCE_ID
+  if ((RIG_NEEDS_PAPERCLIP)); then
+    RIG_HTTP_PORT=$(rig_free_port 3400 3499) || rig_die "no free HTTP port"
+    RIG_PG_PORT=$(rig_free_port 54400 54499) || rig_die "no free Postgres port"
+  else
+    RIG_HTTP_PORT=0
+    RIG_PG_PORT=0
+  fi
+
+  rig_guard_sandbox
+  ((RIG_NEEDS_PAPERCLIP)) && rig_guard_ports
+
+  rig_say "Bringing up the rig for $RIG_PLUGIN_ID ($RIG_MODE)"
+  rig_create_sandbox
+  trap rig_up_cleanup_on_failure EXIT
+  trap 'rig_teardown; exit 130' INT TERM
+
+  ln -sfn "$RIG_SESSION" "$RIG_SESSION_LINK"
+  rig_state_set plugin_id "$RIG_PLUGIN_ID"
+  rig_state_set mode "$RIG_MODE"
+  rig_state_set instance_id "$RIG_INSTANCE_ID"
+  rig_state_set http_port "$RIG_HTTP_PORT"
+  rig_state_set pg_port "$RIG_PG_PORT"
+  rig_state_set source "$RIG_PLUGIN_SRC_ABS"
+
+  rig_seed_omarchy_config
+  rig_write_stubs
+  rig_export_env
+  rig_guard_no_host_systemd
+  rig_ok "sandbox at $RIG_SESSION (HOME=$RIG_HOME)"
+
+  if ((RIG_NEEDS_PAPERCLIP)); then
+    rig_pc_write_config
+    rig_pc_start
+  fi
+
+  rig_start_compositor
+  rig_start_shell
+  rig_build_package_repo
+
+  RIG_UP_SUCCEEDED=1
+  trap - EXIT
+  trap - INT TERM
+
+  rig_say "Rig is up"
+  cmd_status
+  cat >&2 <<INFO
+
+  Next:
+    dev/rig check                  run the checks
+    dev/rig screenshot shot.png    capture the nested shell
+    dev/rig exec -- omarchy plugin list
+    dev/rig down                   tear it down
+
+INFO
+}
+
+# -------------------------------------------------------------------- down ----
+
+cmd_down() {
+  local keep=""
+  while (($#)); do
+    case $1 in
+    --keep-evidence)
+      keep=${2:?--keep-evidence needs a directory}
+      shift
+      ;;
+    *) rig_die "down: unknown option $1" ;;
+    esac
+    shift
+  done
+
+  rig_load_state || {
+    rig_warn "no rig session is up"
+    cmd_verify_clean_nothing
+    return 0
+  }
+  rig_export_env
+  rig_teardown "$keep"
+  rig_verify_clean
+}
+
+cmd_verify_clean_nothing() {
+  # Nothing was up, so the only thing to prove is that nothing is lying around.
+  local stale=0
+  if compgen -G "$RIG_TMP_ROOT/$RIG_PLUGIN_ID."'*' >/dev/null 2>&1; then
+    rig_fail "stale session directories under $RIG_TMP_ROOT:"
+    ls -d "$RIG_TMP_ROOT/$RIG_PLUGIN_ID."* >&2
+    stale=1
+  fi
+  if compgen -G "$RIG_HOST_RUNTIME_DIR/opr."'*' >/dev/null 2>&1; then
+    rig_fail "stale runtime directories:"
+    ls -d "$RIG_HOST_RUNTIME_DIR/opr."* >&2
+    stale=1
+  fi
+  ((stale)) && return 1
+  rig_ok "no rig state anywhere"
+  return 0
+}
+
+cmd_verify_clean() {
+  if rig_load_state; then
+    rig_warn "a session is still up at $RIG_SESSION — run 'dev/rig down'"
+    return 1
+  fi
+  cmd_verify_clean_nothing
+}
+
+# ------------------------------------------------------------------ status ----
+
+cmd_status() {
+  rig_load_state || {
+    rig_warn "no rig session is up"
+    return 1
+  }
+  rig_export_env
+  {
+    printf '  plugin      %s\n' "$RIG_PLUGIN_ID"
+    printf '  source      %s\n' "$(rig_state_get source || echo '?')"
+    printf '  mode        %s\n' "$RIG_MODE"
+    printf '  session     %s\n' "$RIG_SESSION"
+    printf '  sandbox     HOME=%s\n' "$RIG_HOME"
+    printf '  runtime     %s\n' "$RIG_RUNTIME_DIR"
+    printf '  compositor  pid %s  display %s\n' "${RIG_HYPR_PID:-?}" "${RIG_NESTED_DISPLAY:-?}"
+    [[ -n ${RIG_PARENT_PID:-} ]] &&
+      printf '  parent      pid %s (headless parent compositor)\n' "$RIG_PARENT_PID"
+    printf '  shell       pid %s\n' "${RIG_SHELL_PID:-?}"
+    if ((RIG_NEEDS_PAPERCLIP)); then
+      local health="down"
+      rig_pc_healthy && health="ok"
+      printf '  instance    %s  pid %s  http://127.0.0.1:%s (%s)\n' \
+        "$RIG_INSTANCE_ID" "${RIG_INSTANCE_PID:-none}" "$RIG_HTTP_PORT" "$health"
+      printf '  postgres    port %s\n' "$RIG_PG_PORT"
+    fi
+    printf '  evidence    %s\n' "$RIG_EVIDENCE"
+    printf '  logs        %s\n' "$RIG_LOGS"
+    printf '  plugin dir  %s\n' "$RIG_PLUGINS_DIR"
+  } >&2
+}
+
+# ------------------------------------------------------------------ checks ----
+
+cmd_check() {
+  rig_load_state || rig_die "no rig session is up; run 'dev/rig up' first"
+  rig_export_env
+  rig_guard_sandbox
+  rig_guard_nested_display
+  rig_guard_nested_shell
+  rig_guard_no_host_systemd
+  rig_guard_stubs
+
+  rig_check_host_untouched
+  rig_check_manifest
+  rig_check_cold_install
+  rig_check_enable
+  rig_check_screenshot
+  if ((RIG_NEEDS_PAPERCLIP)); then
+    rig_check_plugin_scripts_up
+    rig_check_plugin_scripts_down
+  fi
+  rig_check_repeat_install
+  rig_check_disable
+  rig_check_remove
+  rig_check_host_untouched
+
+  rig_write_summary_file
+  rig_check_summary
+}
+
+# ---------------------------------------------------------------------- ci ----
+
+cmd_ci() {
+  local mode=--headless out="$RIG_DIR/../.rig-evidence"
+  while (($#)); do
+    case $1 in
+    --nested) mode=--nested ;;
+    --headless) mode=--headless ;;
+    --evidence)
+      out=${2:?--evidence needs a directory}
+      shift
+      ;;
+    *) rig_die "ci: unknown option $1" ;;
+    esac
+    shift
+  done
+
+  cmd_up "$mode" || return 1
+  local status=0
+  # A subshell: rig_die exits, and an exit here would skip the teardown.
+  (cmd_check) || status=$?
+  cmd_down --keep-evidence "$out" || status=1
+  if ((status)); then
+    rig_fail "rig ci failed; evidence in $out"
+  else
+    rig_ok "rig ci passed; evidence in $out"
+  fi
+  return $status
+}
+
+# ------------------------------------------------------------- screenshot ----
+
+cmd_screenshot() {
+  rig_load_state || rig_die "no rig session is up"
+  rig_export_env
+  rig_guard_nested_display
+  local out=${1:-$RIG_EVIDENCE/nested-shell.png}
+  rig_grim_wait "$out" || rig_die "grim failed"
+  [[ -s $out ]] || rig_die "grim wrote an empty file"
+  rig_ok "wrote $out ($(stat -c %s "$out") bytes)"
+  printf '%s\n' "$out"
+}
+
+# ----------------------------------------------------------- restart-shell ----
+
+cmd_restart_shell() {
+  # Quickshell reloads QML on a plugin change but keeps the JS modules it has
+  # already imported, so after a .js edit the shell must be started again. The
+  # compositor, the Paperclip instance and shell.json stay as they are, so the
+  # installed plugin and its bar placement survive.
+  rig_load_state || rig_die "no rig session is up"
+  rig_export_env
+  rig_guard_sandbox
+  rig_guard_nested_display
+  rig_guard_nested_shell
+
+  local old=$RIG_SHELL_PID
+  rig_say "Restarting the nested shell (pid $old)"
+  rig_kill_tree "$old" TERM
+  rig_wait_gone "$old" 10 || rig_kill_tree "$old" KILL
+  rig_wait_gone "$old" 5 || rig_die "the old nested shell (pid $old) will not stop"
+  rig_state_set shell_pid ""
+  RIG_SHELL_PID=""
+
+  rig_start_shell
+}
+
+# -------------------------------------------------------------------- seed ----
+
+cmd_seed() {
+  ((RIG_NEEDS_PAPERCLIP)) || rig_die "seed: $RIG_PLUGIN_ID does not use a Paperclip instance (RIG_NEEDS_PAPERCLIP=0)"
+  rig_load_state || rig_die "no rig session is up; run 'dev/rig up' first"
+  rig_export_env
+  rig_guard_sandbox
+  rig_pc_seed
+}
+
+# -------------------------------------------------------------------- logs ----
+
+cmd_logs() {
+  rig_load_state || rig_die "no rig session is up"
+  case ${1:-shell} in
+  shell) tail -n "${2:-80}" "$RIG_LOGS/shell.log" ;;
+  compositor) tail -n "${2:-80}" "$RIG_LOGS/compositor.log" ;;
+  instance) tail -n "${2:-80}" "$RIG_LOGS/instance.log" ;;
+  stubs) cat "$RIG_LOGS/stub-calls.log" ;;
+  *) rig_die "logs: unknown target $1" ;;
+  esac
+}
+
+# -------------------------------------------------------------------- exec ----
+
+cmd_exec() {
+  rig_load_state || rig_die "no rig session is up"
+  rig_export_env
+  rig_guard_sandbox
+  rig_guard_nested_display
+  [[ ${1:-} == -- ]] && shift
+  (($#)) || rig_die "exec: nothing to run"
+  cd "$RIG_PLUGIN_SRC_ABS" || exit 1
+  exec "$@"
+}
+
+# ------------------------------------------------------------------ dispatch ----
+
+command=${1:-help}
+shift || true
+
+case $command in
+up) cmd_up "$@" ;;
+down) cmd_down "$@" ;;
+ci) cmd_ci "$@" ;;
+check) cmd_check "$@" ;;
+status) cmd_status "$@" ;;
+screenshot) cmd_screenshot "$@" ;;
+restart-shell) cmd_restart_shell "$@" ;;
+seed) cmd_seed "$@" ;;
+logs) cmd_logs "$@" ;;
+exec) cmd_exec "$@" ;;
+verify-clean) cmd_verify_clean "$@" ;;
+help | -h | --help) rig_usage ;;
+*)
+  rig_fail "unknown command: $command"
+  rig_usage
+  exit 1
+  ;;
+esac

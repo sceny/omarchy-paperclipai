@@ -1,0 +1,165 @@
+#!/bin/bash
+# Take a fresh Omarchy box to a running Paperclip instance.
+#
+# Usage:
+#   omarchy-paperclip-setup [--yes] [--no-service] [--no-webapp] [--no-widget] [--no-skills]
+#
+# Every step is skipped when it is already done, so running this twice is
+# harmless — the bar calls it whenever setup looks incomplete. It installs
+# nothing silently: Node.js and the Paperclip CLI are confirmed first unless
+# --yes is given.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+assume_yes=false
+want_service=true
+want_webapp=true
+want_widget=true
+want_skills=true
+
+for argument in "$@"; do
+  case $argument in
+  --yes | -y) assume_yes=true ;;
+  --no-service) want_service=false ;;
+  --no-webapp) want_webapp=false ;;
+  --no-widget) want_widget=false ;;
+  --no-skills) want_skills=false ;;
+  -h | --help)
+    sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    pc_fail "Unknown option: $argument"
+    exit 1
+    ;;
+  esac
+done
+
+confirm() {
+  # confirm "question" — yes when --yes, or when the user says so.
+  [[ $assume_yes == true ]] && return 0
+  [[ -t 0 ]] || return 1
+  local answer=""
+  read -r -p "$1 [Y/n] " answer
+  [[ -z $answer || ${answer,,} == y* ]]
+}
+
+keep_open() {
+  # A terminal opened by the bar closes the moment this exits, taking the
+  # error message with it. Hold it open when someone is watching.
+  [[ -t 0 ]] || return 0
+  echo
+  read -r -p "Press enter to close… " _ || true
+}
+
+finish_ok() {
+  pc_say "$1"
+  pc_notify normal "󰛢" "Paperclip is ready" "$1" --exec "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-open"
+  keep_open
+  exit 0
+}
+
+finish_fail() {
+  pc_fail "$1"
+  pc_notify critical "󰀦" "Paperclip setup stopped" "$1" \
+    --exec "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-doctor"
+  pc_warn "Next step: $PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-doctor"
+  keep_open
+  exit 1
+}
+
+echo
+pc_say "Setting up Paperclip for Omarchy"
+echo "   Instance: $PAPERCLIP_INSTANCE"
+echo "   Data:     $HOME/.paperclip/instances/$PAPERCLIP_INSTANCE"
+echo
+
+# ---------------------------------------------------------------- Node.js ----
+if ! pc_node_ok; then
+  pc_warn "Paperclip needs Node.js 24.11 or newer."
+  if command -v pacman >/dev/null 2>&1; then
+    if confirm "Install nodejs and npm with pacman now?"; then
+      sudo pacman -S --needed --noconfirm nodejs npm || finish_fail "Installing Node.js failed."
+    else
+      finish_fail "Install Node.js 24.11+ (pacman -S nodejs npm or mise use -g node@24) and run setup again."
+    fi
+  else
+    finish_fail "Install Node.js 24.11+ and run setup again."
+  fi
+  pc_node_ok || finish_fail "Node.js is still older than 24.11 — check 'node --version'."
+fi
+pc_say "Node.js $(node --version) is good."
+
+# ------------------------------------------------------------ Paperclip CLI ----
+if ! command -v paperclipai >/dev/null 2>&1 && [[ ! -x $HOME/.local/bin/paperclipai ]]; then
+  if confirm "Install the Paperclip CLI (npx paperclipai install)?"; then
+    # The managed install puts a real binary on PATH, which the background
+    # service needs; npx alone would tie the service to an npm cache entry.
+    npx -y paperclipai@latest install -y || pc_warn "Managed install failed; falling back to npx."
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    pc_warn "Continuing with npx; install the CLI later for a background service."
+  fi
+fi
+
+if [[ -z $(pc_cli) ]]; then
+  finish_fail "No way to run the Paperclip CLI (no paperclipai, no npx)."
+fi
+pc_say "Paperclip CLI: $(pc_cli | tr '\n' ' ')"
+
+# ---------------------------------------------------------------- onboard ----
+config=$HOME/.paperclip/instances/$PAPERCLIP_INSTANCE/config.json
+if [[ -f $config ]]; then
+  pc_say "Instance '$PAPERCLIP_INSTANCE' is already configured."
+else
+  pc_say "Running first-run setup…"
+  onboard_args=(onboard -y)
+  if [[ $want_service == true ]]; then
+    onboard_args+=(--install-service)
+  else
+    onboard_args+=(--no-install-service --run)
+  fi
+  pc_run_cli "${onboard_args[@]}" || finish_fail "Onboarding failed."
+fi
+
+# ---------------------------------------------------------------- running ----
+if ! pc_health_ok; then
+  if [[ $want_service == true ]]; then
+    pc_say "Starting the background service…"
+    if ! pc_run_cli service install >/dev/null 2>&1; then
+      pc_warn "Could not install the service (systemd user manager missing?)."
+    fi
+    pc_run_cli service start >/dev/null 2>&1 || true
+  fi
+  if ! pc_wait_for_health 90; then
+    finish_fail "Paperclip is installed but not answering on $(pc_api_base)."
+  fi
+fi
+pc_say "Paperclip is answering on $(pc_api_base)."
+
+# ----------------------------------------------------------------- web app ----
+if [[ $want_webapp == true ]]; then
+  "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-webapp" ensure || pc_warn "Web app launcher not created."
+fi
+
+# ------------------------------------------------------------------ skills ----
+# Agents on this machine get the Paperclip skills, so a session started from
+# the doctor or by hand already knows the Paperclip API and workflow.
+if [[ $want_skills == true ]]; then
+  "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-skills" install || pc_warn "Paperclip skills not installed."
+fi
+
+# -------------------------------------------------------------- bar widget ----
+if [[ $want_widget == true ]] && command -v omarchy >/dev/null 2>&1; then
+  if ! omarchy plugin list --json 2>/dev/null |
+    jq -e --arg id "$PAPERCLIP_PLUGIN_ID" '.[] | select(.id == $id and .enabled == true)' >/dev/null 2>&1; then
+    pc_say "Adding the Paperclip widget to the bar…"
+    omarchy plugin enable "$PAPERCLIP_PLUGIN_ID" >/dev/null 2>&1 ||
+      pc_warn "Enable it yourself with: omarchy plugin enable $PAPERCLIP_PLUGIN_ID"
+  fi
+fi
+
+finish_ok "Paperclip is running at $(pc_api_base)"

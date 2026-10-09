@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Paperclip">
+  <title>Paperclip</title>
+  <rect width="256" height="256" rx="52" fill="#15181a"/>
+  <path d="M100 200 V78 a26 26 0 0 1 52 0 V186 a42 42 0 0 1 -84 0 V98"
+        fill="none" stroke="#e7e9ea" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

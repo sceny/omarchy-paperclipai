@@ -1,0 +1,10 @@
+# Skills copied unchanged from github.com/paperclipai/paperclip (MIT).
+# dev/sync-skills refreshes them; bin/omarchy-paperclip-skills installs them.
+# Format: <skill name> <path in the upstream repo>
+source https://github.com/paperclipai/paperclip
+commit 98e3cec78e8461774022a5ba0a777b09d4d16b96
+skill paperclip skills/paperclip
+skill paperclip-board skills/paperclip-board
+skill paperclip-converting-plans-to-tasks skills/paperclip-converting-plans-to-tasks
+skill paperclip-create-agent skills/paperclip-create-agent
+skill para-memory-files skills/para-memory-files

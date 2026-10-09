@@ -1,0 +1,197 @@
+#!/bin/bash
+# Open an AI session that can repair this machine's Paperclip instance.
+#
+# Usage:
+#   omarchy-paperclip-agent [--inline] [--session-dir DIR] [--prompt-file FILE]
+#   omarchy-paperclip-agent --list-skills
+#   omarchy-paperclip-agent --prepare-only [--session-dir DIR]
+#
+# The default coding agent (`omarchy default agent <name>`) is the session. It
+# starts in a session directory holding the three things it needs:
+#
+#   .claude/skills/   the skills for this job, shipped and user-owned
+#   AGENTS.md         where this instance lives, and what may be touched
+#   doctor.log, …     whatever the caller leaves there as evidence
+#
+# Skills come from two directories, and the second one wins on a name clash:
+#
+#   $PAPERCLIP_PLUGIN_DIR/skills            shipped with the plugin
+#   ~/.config/omarchy/paperclipai/skills    the user's own
+#
+# The agent's own global skills stay loaded, because they live in the user's
+# home and not in the session directory.
+#
+# --inline replaces this process with the agent, for a caller that already owns
+# a terminal window. Without it the agent opens its own window.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+inline=false
+session=""
+prompt_file=""
+list_only=false
+prepare_only=false
+
+while (($#)); do
+  case $1 in
+  --inline)
+    inline=true
+    shift
+    ;;
+  --session-dir)
+    session=${2:?--session-dir needs a path}
+    shift 2
+    ;;
+  --prompt-file)
+    prompt_file=${2:?--prompt-file needs a path}
+    shift 2
+    ;;
+  --list-skills)
+    list_only=true
+    shift
+    ;;
+  --prepare-only)
+    prepare_only=true
+    shift
+    ;;
+  -h | --help)
+    sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    pc_fail "Unknown option: $1"
+    exit 1
+    ;;
+  esac
+done
+
+user_skills=${PAPERCLIP_OMARCHY_SKILLS_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/paperclipai/skills}
+plugin_skills=$PAPERCLIP_PLUGIN_DIR/skills
+
+if [[ $list_only == true ]]; then
+  for source_dir in "$plugin_skills" "$user_skills"; do
+    [[ -d $source_dir ]] || continue
+    for skill in "$source_dir"/*/; do
+      [[ -f ${skill}SKILL.md ]] || continue
+      printf '%s\t%s\n' "$(basename "$skill")" "$source_dir"
+    done
+  done | sort -u -k1,1 -s
+  exit 0
+fi
+
+[[ -n $session ]] || session=$(pc_state_dir)/session-$(date +%Y%m%d-%H%M%S)
+mkdir -p "$session/.claude/skills" || {
+  pc_fail "Could not create the session directory: $session"
+  exit 1
+}
+
+# Copy rather than symlink: the session directory is the agent's own tree, and
+# a user who edits a skill mid-session should not be editing the plugin.
+for source_dir in "$plugin_skills" "$user_skills"; do
+  [[ -d $source_dir ]] || continue
+  cp -RL --no-preserve=mode "$source_dir/." "$session/.claude/skills/" 2>/dev/null ||
+    cp -RL "$source_dir/." "$session/.claude/skills/" 2>/dev/null ||
+    pc_warn "Could not copy the skills in $source_dir"
+done
+rm -f "$session/.claude/skills/README.md"
+
+# The session directory is scratch, so the paths worth repairing are elsewhere.
+# Claude Code reads this list; the other agents ignore it and are no worse off.
+python3 - "$session/.claude/settings.local.json" \
+  "$HOME/.paperclip" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy" \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy" \
+  "$PAPERCLIP_PLUGIN_DIR" <<'PYTHON'
+import json, os, sys
+
+target, *directories = sys.argv[1:]
+settings = {"permissions": {"additionalDirectories": [d for d in directories if os.path.isdir(d)]}}
+with open(target, "w") as handle:
+    json.dump(settings, handle, indent=2)
+    handle.write("\n")
+PYTHON
+
+api_base=$(pc_api_base)
+status_json=$(pc_status)
+state=$(pc_status_field '.state' "$status_json")
+summary=$(pc_status_field '.summary' "$status_json")
+
+cat >"$session/AGENTS.md" <<AGENTS
+# Repair this machine's Paperclip instance
+
+You were opened by the Paperclip bar widget on an Omarchy desktop. The user is
+at the keyboard. Paperclip (https://docs.paperclip.ing) runs their AI agents,
+and something about it needs attention.
+
+Use the \`paperclip-doctor\` skill. It holds the commands, the paths and the
+rules for this job.
+
+## This machine, when the session opened
+
+| | |
+| --- | --- |
+| instance | \`$PAPERCLIP_INSTANCE\` |
+| api base | $api_base |
+| state | ${state:-unknown} |
+| summary | ${summary:-unknown} |
+| plugin | \`$PAPERCLIP_PLUGIN_DIR\` (id \`$PAPERCLIP_PLUGIN_ID\`) |
+
+## This directory
+
+It is scratch. Nothing here is the user's work, and nothing here needs to be
+kept. What you repair lives outside it:
+
+- \`~/.paperclip/instances/$PAPERCLIP_INSTANCE\` — the instance, its state and
+  its logs. **Never delete anything under \`~/.paperclip\`.**
+- \`$PAPERCLIP_PLUGIN_DIR\` — the bar widget and its scripts.
+- \`~/.config/omarchy\` — the desktop's configuration.
+
+Evidence the doctor leaves here, when it ran:
+
+- \`doctor.status\` — \`running\`, \`fixed\`, \`still-broken\`, \`healthy\`,
+  \`no-cli\` or \`skipped\`.
+- \`doctor.log\` — the output of \`paperclipai doctor --repair\`.
+- \`bundle.log\` — versions, status probe, service state, logs, sockets.
+
+## First
+
+Read the evidence, say in two or three lines what state Paperclip is in, then
+ask the user what they want. Do not change anything before they answer.
+AGENTS
+ln -sfn AGENTS.md "$session/CLAUDE.md"
+
+if [[ $prepare_only == true ]]; then
+  printf '%s\n' "$session"
+  exit 0
+fi
+
+prompt=""
+if [[ -n $prompt_file ]]; then
+  if [[ -r $prompt_file ]]; then
+    prompt=$(cat "$prompt_file")
+  else
+    pc_warn "No prompt file at $prompt_file"
+  fi
+fi
+[[ -n $prompt ]] || prompt="Read AGENTS.md, then tell me the state of my Paperclip instance and ask me what to fix."
+
+agent=$(command -v omarchy-default-agent >/dev/null 2>&1 && omarchy-default-agent || true)
+if [[ -z $agent ]]; then
+  pc_fail "No default coding agent is set, so there is no session to open."
+  pc_warn "Pick one with: omarchy default agent <name>"
+  pc_warn "Everything the agent would have read is here: $session"
+  exit 1
+fi
+
+# The agent starts in the current directory, which is how it finds the skills
+# and AGENTS.md written above.
+cd "$session" || exit 1
+
+pc_say "Opening $agent in $session"
+if [[ $inline == true ]]; then
+  exec omarchy-agent --inline --prompt "$prompt"
+fi
+exec omarchy-agent --prompt "$prompt"

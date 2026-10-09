@@ -1,0 +1,74 @@
+#!/bin/bash
+# Keep the Paperclip web app launcher in sync with the running instance.
+#
+# Usage:
+#   omarchy-paperclip-webapp [ensure|refresh|remove] [--quiet]
+#
+# ensure   create the launcher when it is missing (default)
+# refresh  rewrite it even when it exists, e.g. after the port changed
+# remove   delete it
+#
+# The icon comes from the running instance, so the launcher always carries the
+# real Paperclip mark. A shipped mark stands in when the instance is down.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+action=${1:-ensure}
+[[ $action == --* ]] && action=ensure
+quiet=false
+for argument in "$@"; do
+  [[ $argument == "--quiet" ]] && quiet=true
+done
+
+say() { [[ $quiet == true ]] || pc_say "$@"; }
+
+desktop_file=$HOME/.local/share/applications/$PAPERCLIP_WEBAPP_NAME.desktop
+
+case $action in
+remove)
+  if command -v omarchy-webapp-remove >/dev/null 2>&1; then
+    omarchy-webapp-remove "$PAPERCLIP_WEBAPP_NAME" >/dev/null 2>&1 || rm -f "$desktop_file"
+  else
+    rm -f "$desktop_file"
+  fi
+  say "Removed the $PAPERCLIP_WEBAPP_NAME web app."
+  exit 0
+  ;;
+ensure)
+  if [[ -f $desktop_file ]]; then
+    say "$PAPERCLIP_WEBAPP_NAME web app already installed."
+    exit 0
+  fi
+  ;;
+refresh) ;;
+*)
+  pc_fail "Unknown action: $action (use ensure, refresh or remove)"
+  exit 1
+  ;;
+esac
+
+if ! command -v omarchy-webapp-install >/dev/null 2>&1; then
+  pc_fail "omarchy-webapp-install is missing — is this an Omarchy install?"
+  exit 1
+fi
+
+url=$(pc_api_base)
+icon=$PAPERCLIP_PLUGIN_DIR/assets/paperclipai.png
+state=$(pc_state_dir)
+
+# The instance serves its own icon; prefer it over the copy we ship.
+if curl -fsS --max-time 6 -o "$state/icon.png" "$url/apple-touch-icon.png" 2>/dev/null &&
+  [[ -s $state/icon.png ]]; then
+  icon=$state/icon.png
+fi
+
+say "Installing the $PAPERCLIP_WEBAPP_NAME web app for $url"
+if omarchy-webapp-install "$PAPERCLIP_WEBAPP_NAME" "$url" "$icon"; then
+  say "Launch it from the app launcher (SUPER + SPACE) or the bar icon."
+else
+  pc_fail "Could not create the web app launcher."
+  exit 1
+fi

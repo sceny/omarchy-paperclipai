@@ -1,0 +1,32 @@
+#!/bin/bash
+# Refresh the Paperclip skills in skills/ from a Paperclip checkout.
+#
+# Usage: dev/sync-skills [path-to-paperclip-checkout]
+#
+# Copies every "skill" line of skills/upstream.list from the checkout, then
+# writes the checkout's commit into the list. Review the diff before you
+# commit: these files are what agents read to make decisions.
+
+set -euo pipefail
+
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+upstream=${1:-$HOME/Projects/src/github/paperclipai/paperclip}
+list=$root/skills/upstream.list
+
+[[ -d $upstream/.git ]] || {
+  echo "Not a Paperclip checkout: $upstream" >&2
+  exit 1
+}
+
+commit=$(git -C "$upstream" rev-parse HEAD)
+awk '$1 == "skill" { print $2, $3 }' "$list" | while read -r name path; do
+  [[ -f $upstream/$path/SKILL.md ]] || {
+    echo "Missing upstream: $path" >&2
+    exit 1
+  }
+  rm -rf "${root:?}/skills/$name"
+  cp -r "$upstream/$path" "$root/skills/$name"
+  ln -sfn "../../skills/$name" "$root/.claude/skills/$name"
+done
+sed -i "s/^commit .*/commit $commit/" "$list"
+echo "Skills synced to $commit"

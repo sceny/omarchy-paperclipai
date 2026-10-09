@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""Act on one inbox row, or retry a bounded batch of them.
+
+This is the plugin's only write path to the Paperclip API. The status probe
+(`omarchy-paperclip-status`) stays a read-only GET client; everything that
+changes something goes through here. One reader, one writer.
+
+    omarchy-paperclip-inbox dismiss   --company ID --item-key attention:...
+    omarchy-paperclip-inbox restore   --company ID --item-key attention:...
+    omarchy-paperclip-inbox snooze    --company ID --item-key attention:... --hours 1
+    omarchy-paperclip-inbox snooze    --company ID --item-key attention:... --tomorrow
+    omarchy-paperclip-inbox retry     --company ID --kind run --agent ID --run ID
+    omarchy-paperclip-inbox retry     --company ID --kind recovery --issue ID --action ID
+    omarchy-paperclip-inbox retry-all --company ID [--limit 20] [--filter all]
+
+Every call prints JSON on stdout and exits 0, the same contract the probe
+keeps: a refusal from the server is a normal answer with the server's own
+words in `message`, not a crash for the widget to guess at.
+
+`retry-all` prints one progress object per line while it works and the result
+object last, so a caller reading stdout line by line can show a counter.
+
+Two rules the batch obeys, because neither is the widget's to decide:
+
+  * Failed runs only. A recovery hand-back changes a task's status and moves
+    ownership, so it stays a per-row press.
+  * Capped and sequential. 124 concurrent agent runs is a self-inflicted
+    outage and a large bill.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+RETRY_ALL_DEFAULT_LIMIT = 20
+RETRY_ALL_MAX_LIMIT = 100
+# The API never returns more than 100 rows in one page.
+FEED_PAGE = 100
+
+
+def load_probe():
+    """Borrow the probe's answers to "where is the instance" and "what token".
+
+    Resolving the instance twice is how the two scripts end up talking to
+    different Paperclips.
+    """
+    path = os.path.join(HERE, "omarchy-paperclip-status")
+    # No bin/__pycache__: the shell watches the plugin directory and reloads
+    # the plugin on any new file in it, which closes the panel mid-action.
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_loader(
+        "paperclip_status", importlib.machinery.SourceFileLoader("paperclip_status", path)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Writer:
+    """POST/DELETE client. Every call answers with (ok, status, payload)."""
+
+    def __init__(self, base: str, token: str, timeout: float):
+        self.base = base
+        self.token = token
+        self.timeout = timeout
+
+    def send(self, method: str, path: str, body=None):
+        data = None
+        request = urllib.request.Request(self.base + path, method=method)
+        request.add_header("Accept", "application/json")
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            request.add_header("Content-Type", "application/json")
+        if self.token:
+            request.add_header("Authorization", "Bearer " + self.token)
+        try:
+            with urllib.request.urlopen(request, data=data, timeout=self.timeout) as response:
+                raw = response.read()
+                status = response.status
+        except urllib.error.HTTPError as error:
+            raw = b""
+            try:
+                raw = error.read()
+            except OSError:
+                pass
+            return False, error.code, parse_body(raw)
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as error:
+            return False, 0, {"error": "%s: the instance did not answer" % type(error).__name__}
+        return True, status, parse_body(raw)
+
+    def get(self, path: str):
+        return self.send("GET", path)
+
+
+def parse_body(raw: bytes):
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return {"error": raw.decode("utf-8", "replace")[:400]}
+
+
+def message_of(payload, fallback: str) -> str:
+    """The server's own words, or a plain sentence when it gave none."""
+    if isinstance(payload, dict):
+        for key in ("error", "message", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return " ".join(value.split())[:400]
+    return fallback
+
+
+def code_of(payload) -> str:
+    if isinstance(payload, dict):
+        value = payload.get("code")
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def emit(obj, stream=None) -> None:
+    (stream or sys.stdout).write(json.dumps(obj) + "\n")
+    (stream or sys.stdout).flush()
+
+
+# ------------------------------------------------------------------ single row
+
+
+def do_dismiss(writer: Writer, company: str, item_key: str) -> dict:
+    ok, status, payload = writer.send(
+        "POST", "/api/companies/%s/inbox-dismissals" % company,
+        {"itemKey": item_key, "kind": "dismiss"},
+    )
+    return {
+        "action": "dismiss", "itemKey": item_key, "ok": ok, "status": status,
+        "message": "Cleared" if ok else message_of(payload, "The row could not be cleared."),
+        "code": code_of(payload),
+    }
+
+
+def do_restore(writer: Writer, company: str, item_key: str) -> dict:
+    ok, status, payload = writer.send(
+        "DELETE", "/api/companies/%s/inbox-dismissals/%s"
+        % (company, urllib.parse.quote(item_key, safe="")),
+    )
+    return {
+        "action": "restore", "itemKey": item_key, "ok": ok, "status": status,
+        "message": "Back in the inbox" if ok else message_of(payload, "The row could not be restored."),
+        "code": code_of(payload),
+    }
+
+
+def snooze_until(hours: float, tomorrow: bool, explicit: str) -> str:
+    if explicit:
+        return explicit
+    now = datetime.now(timezone.utc).astimezone()
+    if tomorrow:
+        target = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    else:
+        target = now + timedelta(hours=max(0.1, hours))
+    return target.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def do_snooze(writer: Writer, company: str, item_key: str, until: str) -> dict:
+    ok, status, payload = writer.send(
+        "POST", "/api/companies/%s/inbox-dismissals" % company,
+        {"itemKey": item_key, "kind": "snooze", "snoozedUntil": until},
+    )
+    return {
+        "action": "snooze", "itemKey": item_key, "ok": ok, "status": status, "snoozedUntil": until,
+        "message": "Snoozed" if ok else message_of(payload, "The row could not be snoozed."),
+        "code": code_of(payload),
+    }
+
+
+def retry_run(writer: Writer, agent_id: str, run_id: str) -> dict:
+    """Replay the exact failed request.
+
+    The server refuses any attempt to change the context — a fresh session, a
+    different trigger, caller-supplied task markers — so this call carries
+    nothing but the run to repeat. It is the same call the Paperclip board
+    makes from the run page.
+    """
+    ok, status, payload = writer.send(
+        "POST", "/api/agents/%s/wakeup" % agent_id,
+        {
+            "source": "on_demand",
+            "triggerDetail": "manual",
+            "reason": "retry_failed_run",
+            "failedRunId": run_id,
+            "forceFreshSession": False,
+        },
+    )
+    note = "Retry queued" if ok else message_of(payload, "The retry was refused.")
+    code = code_of(payload)
+    # A 202 is not a yes. The server answers a wakeup it declined with
+    # 202 {"status": "skipped", "reason", "message"} — a reconciliation
+    # blocker, say — and nothing runs. Reporting that as queued is the lie this
+    # button exists to avoid. The one skip that is not a refusal is
+    # issue_execution_deferred: the task is already running, so the work is
+    # under way and the row is not stuck.
+    if ok and isinstance(payload, dict) and str(payload.get("status") or "") == "skipped":
+        code = str(payload.get("reason") or "wakeup_skipped")
+        note = message_of(payload, "The server skipped the retry.")
+        ok = code == "issue_execution_deferred"
+    return {
+        "action": "retry", "retryKind": "run", "runId": run_id, "agentId": agent_id,
+        "ok": ok, "status": status,
+        "message": note,
+        "code": code,
+    }
+
+
+def retry_recovery(writer: Writer, issue_id: str, action_id: str) -> dict:
+    """Hand the task back to its owner and let it be picked up again."""
+    ok, status, payload = writer.send(
+        "POST", "/api/issues/%s/recovery-actions/resolve" % issue_id,
+        {"actionId": action_id, "outcome": "restored", "sourceIssueStatus": "todo"},
+    )
+    return {
+        "action": "retry", "retryKind": "recovery", "issueId": issue_id, "actionId": action_id,
+        "ok": ok, "status": status,
+        "message": "Handed back to its owner" if ok
+        else message_of(payload, "The hand-back was refused."),
+        "code": code_of(payload),
+    }
+
+
+# -------------------------------------------------------------------- the batch
+
+
+def failed_run_rows(writer: Writer, company: str, inbox_filter: str, limit: int):
+    """The failed-run rows this batch will repeat, in the server's decide order.
+
+    Read back from the same query the panel lists, so "retry all" means the
+    rows you are looking at and nothing else.
+    """
+    query = "/api/companies/%s/attention?sort=decide&limit=%d" % (company, FEED_PAGE)
+    if inbox_filter == "all":
+        query += "&includeDismissed=true"
+    ok, _status, payload = writer.get(query)
+    if not ok or not isinstance(payload, dict):
+        return None, message_of(payload, "The inbox could not be read.")
+    rows = []
+    for raw in payload.get("items") or []:
+        if not isinstance(raw, dict) or raw.get("sourceKind") != "failed_run":
+            continue
+        subject = raw.get("subject") if isinstance(raw.get("subject"), dict) else {}
+        meta = subject.get("metadata") if isinstance(subject.get("metadata"), dict) else {}
+        run_id = str(subject.get("id") or "")
+        agent_id = str(meta.get("agentId") or "")
+        if not run_id or not agent_id:
+            continue
+        rows.append({"runId": run_id, "agentId": agent_id,
+                     "title": str(subject.get("title") or "Failed run")})
+        if len(rows) >= limit:
+            break
+    return rows, ""
+
+
+def do_retry_all(writer: Writer, company: str, inbox_filter: str, limit: int) -> dict:
+    rows, error = failed_run_rows(writer, company, inbox_filter, limit)
+    if rows is None:
+        return {"action": "retry-all", "ok": False, "attempted": 0, "retried": 0,
+                "refused": 0, "message": error, "results": []}
+    if not rows:
+        return {"action": "retry-all", "ok": True, "attempted": 0, "retried": 0,
+                "refused": 0, "message": "Nothing to try again", "results": []}
+
+    results = []
+    retried = 0
+    total = len(rows)
+    for index, row in enumerate(rows, start=1):
+        emit({"progress": {"done": index - 1, "total": total, "title": row["title"]}})
+        result = retry_run(writer, row["agentId"], row["runId"])
+        if result["ok"]:
+            retried += 1
+        results.append(result)
+    refused = total - retried
+    parts = ["retried %d" % retried]
+    if refused:
+        parts.append("refused %d" % refused)
+    return {
+        "action": "retry-all", "ok": True, "attempted": total, "retried": retried,
+        "refused": refused, "message": " · ".join(parts), "results": results,
+    }
+
+
+# -------------------------------------------------------------------- the clear
+
+
+def do_clear_failed(writer: Writer, company: str, older_than_days: int, apply: bool) -> dict:
+    """Clear failed-run rows that have sat in the inbox longer than N days.
+
+    The doctor's one-time action for a backlog nobody is going to read row by
+    row. It only ever dismisses `failed_run` rows, and a dismissal is
+    reversible through `restore`.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, older_than_days))
+    ok, _status, payload = writer.get(
+        "/api/companies/%s/attention?sort=decide&limit=%d" % (company, FEED_PAGE))
+    if not ok or not isinstance(payload, dict):
+        return {"action": "clear-failed", "ok": False, "cleared": 0, "matched": 0,
+                "message": message_of(payload, "The inbox could not be read.")}
+    matched = []
+    for raw in payload.get("items") or []:
+        if not isinstance(raw, dict) or raw.get("sourceKind") != "failed_run":
+            continue
+        item_key = str(raw.get("dismissalKey") or "")
+        stamp = str(raw.get("activityAt") or raw.get("updatedAt") or "")
+        if not item_key or not stamp:
+            continue
+        try:
+            when = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when <= cutoff:
+            matched.append(item_key)
+    if not apply:
+        return {"action": "clear-failed", "ok": True, "cleared": 0, "matched": len(matched),
+                "message": "%d failed-run rows are older than %d days"
+                           % (len(matched), older_than_days)}
+    cleared = 0
+    for item_key in matched:
+        if do_dismiss(writer, company, item_key)["ok"]:
+            cleared += 1
+    return {"action": "clear-failed", "ok": True, "cleared": cleared, "matched": len(matched),
+            "message": "cleared %d of %d" % (cleared, len(matched))}
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("command", choices=[
+        "dismiss", "restore", "snooze", "retry", "retry-all", "clear-failed"])
+    parser.add_argument("--company", default="", help="company id (required)")
+    parser.add_argument("--item-key", default="", help="the row's dismissalKey")
+    parser.add_argument("--kind", default="run", choices=["run", "recovery"])
+    parser.add_argument("--agent", default="", help="agent id, for a failed-run retry")
+    parser.add_argument("--run", default="", help="failed run id")
+    parser.add_argument("--issue", default="", help="task id, for a recovery hand-back")
+    parser.add_argument("--action", default="", help="recovery action id")
+    parser.add_argument("--until", default="", help="snooze until this ISO timestamp")
+    parser.add_argument("--hours", type=float, default=1.0, help="snooze for this many hours")
+    parser.add_argument("--tomorrow", action="store_true", help="snooze until 09:00 tomorrow")
+    parser.add_argument("--limit", type=int, default=RETRY_ALL_DEFAULT_LIMIT,
+                        help="retry-all: rows per press (default: %d)" % RETRY_ALL_DEFAULT_LIMIT)
+    parser.add_argument("--filter", default="needs-me", choices=["needs-me", "all"],
+                        help="retry-all: which list the batch is scoped to")
+    parser.add_argument("--older-than-days", type=int, default=7)
+    parser.add_argument("--apply", action="store_true", help="clear-failed: actually clear")
+    parser.add_argument("--instance", default="", help="local instance id")
+    parser.add_argument("--api-base", default="", help="Paperclip API base URL")
+    parser.add_argument("--timeout", type=float, default=20.0)
+    args = parser.parse_args(argv)
+
+    probe = load_probe()
+    instance = args.instance or probe.env("PAPERCLIP_OMARCHY_INSTANCE", "default")
+    writer = Writer(probe.resolve_api_base(args.api_base, instance),
+                    probe.read_token(), max(1.0, args.timeout))
+
+    if not args.company:
+        emit({"ok": False, "action": args.command, "message": "No company id was given."})
+        return 0
+
+    if args.command in ("dismiss", "restore", "snooze") and not args.item_key:
+        emit({"ok": False, "action": args.command, "message": "This row has no dismissal key."})
+        return 0
+
+    if args.command == "dismiss":
+        emit(do_dismiss(writer, args.company, args.item_key))
+    elif args.command == "restore":
+        emit(do_restore(writer, args.company, args.item_key))
+    elif args.command == "snooze":
+        emit(do_snooze(writer, args.company, args.item_key,
+                       snooze_until(args.hours, args.tomorrow, args.until)))
+    elif args.command == "retry":
+        if args.kind == "recovery":
+            if not (args.issue and args.action):
+                emit({"ok": False, "action": "retry",
+                      "message": "This hand-back is missing its task or action id."})
+            else:
+                emit(retry_recovery(writer, args.issue, args.action))
+        else:
+            if not (args.agent and args.run):
+                emit({"ok": False, "action": "retry",
+                      "message": "This row is missing its agent or run id."})
+            else:
+                emit(retry_run(writer, args.agent, args.run))
+    elif args.command == "retry-all":
+        limit = max(1, min(RETRY_ALL_MAX_LIMIT, args.limit))
+        emit(do_retry_all(writer, args.company, args.filter, limit))
+    else:
+        emit(do_clear_failed(writer, args.company, args.older_than_days, args.apply))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as error:  # the widget must always get JSON back
+        print(json.dumps({"ok": False, "message": "%s: %s" % (type(error).__name__, error)}))
+        sys.exit(2)

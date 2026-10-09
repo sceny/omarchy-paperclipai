@@ -1,0 +1,117 @@
+#!/bin/bash
+# Install the Paperclip skills that ship with this plugin for the coding agents
+# on this machine, so any agent session already knows how to work with
+# Paperclip.
+#
+# Usage:
+#   omarchy-paperclip-skills install    copy or update the shipped skills
+#   omarchy-paperclip-skills status     what is installed, and where
+#   omarchy-paperclip-skills remove     remove what this plugin installed
+#
+# The skills are the ones listed in skills/upstream.list, copied unchanged from
+# the Paperclip repo. They go into every target directory:
+#
+#   ~/.claude/skills    Claude Code
+#   ~/.agents/skills    Codex and other agents that read the shared path
+#
+# Set PAPERCLIP_OMARCHY_SKILL_TARGETS to a colon-separated list to change that.
+#
+# A skill directory this plugin did not put there is never touched: each copy
+# carries a .omarchy-paperclipai marker, and only marked directories are
+# updated or removed. A user who wants their own version deletes the marker.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+marker=.omarchy-paperclipai
+list=$PAPERCLIP_PLUGIN_DIR/skills/upstream.list
+
+IFS=: read -r -a targets <<<"${PAPERCLIP_OMARCHY_SKILL_TARGETS:-$HOME/.claude/skills:$HOME/.agents/skills}"
+
+shipped_skills() {
+  awk '$1 == "skill" { print $2 }' "$list"
+}
+
+upstream_commit() {
+  awk '$1 == "commit" { print $2 }' "$list"
+}
+
+same_content() {
+  # same_content SRC DEST — DEST matches SRC, ignoring the marker.
+  diff -rq --exclude="$marker" "$1" "$2" >/dev/null 2>&1
+}
+
+do_install() {
+  local target skill src dest added=0 updated=0 kept=0 foreign=0
+  for target in "${targets[@]}"; do
+    mkdir -p "$target" || {
+      pc_warn "Cannot create $target"
+      continue
+    }
+    while read -r skill; do
+      src=$PAPERCLIP_PLUGIN_DIR/skills/$skill
+      dest=$target/$skill
+      [[ -f $src/SKILL.md ]] || continue
+      if [[ -e $dest && ! -f $dest/$marker ]]; then
+        foreign=$((foreign + 1))
+        continue
+      fi
+      if [[ -f $dest/$marker ]] && same_content "$src" "$dest"; then
+        kept=$((kept + 1))
+        continue
+      fi
+      if [[ -e $dest ]]; then updated=$((updated + 1)); else added=$((added + 1)); fi
+      rm -rf "$dest.new"
+      cp -r "$src" "$dest.new" &&
+        printf 'commit %s\n' "$(upstream_commit)" >"$dest.new/$marker" &&
+        rm -rf "$dest" && mv "$dest.new" "$dest" ||
+        pc_warn "Could not install $skill into $target"
+    done < <(shipped_skills)
+  done
+  pc_say "Paperclip skills: $added added, $updated updated, $kept current, $foreign left alone (not ours)."
+}
+
+do_status() {
+  local target skill dest state
+  for target in "${targets[@]}"; do
+    while read -r skill; do
+      dest=$target/$skill
+      if [[ ! -e $dest ]]; then
+        state=missing
+      elif [[ ! -f $dest/$marker ]]; then
+        state=foreign
+      elif same_content "$PAPERCLIP_PLUGIN_DIR/skills/$skill" "$dest"; then
+        state=current
+      else
+        state=outdated
+      fi
+      printf '%s\t%s\t%s\n' "$state" "$skill" "$target"
+    done < <(shipped_skills)
+  done
+}
+
+do_remove() {
+  local target skill removed=0
+  for target in "${targets[@]}"; do
+    while read -r skill; do
+      [[ -f $target/$skill/$marker ]] || continue
+      rm -rf "${target:?}/$skill" && removed=$((removed + 1))
+    done < <(shipped_skills)
+  done
+  pc_say "Removed $removed Paperclip skill copies."
+}
+
+case ${1:-} in
+install) do_install ;;
+status) do_status ;;
+remove) do_remove ;;
+-h | --help)
+  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  ;;
+*)
+  pc_fail "Usage: omarchy-paperclip-skills install|status|remove"
+  exit 1
+  ;;
+esac

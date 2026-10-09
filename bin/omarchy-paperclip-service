@@ -1,0 +1,106 @@
+#!/bin/bash
+# Start, stop or restart the local Paperclip instance.
+#
+# Usage:
+#   omarchy-paperclip-service start|stop|restart|install|status [--quiet]
+#
+# With the background service installed this is a systemd call. Without it,
+# `start` opens a terminal running `paperclipai run`, because a first run that
+# has questions must be visible rather than silently failing in the dark.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+action=${1:-status}
+quiet=false
+for argument in "$@"; do
+  [[ $argument == "--quiet" ]] && quiet=true
+done
+say() { [[ $quiet == true ]] || pc_say "$@"; }
+
+service_installed() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  [[ $(systemctl --user show paperclipai.service --property=LoadState 2>/dev/null) == "LoadState=loaded" ]]
+}
+
+run_in_terminal() {
+  # One foreground run the user can watch, in whatever terminal they chose.
+  local -a cli=()
+  mapfile -t cli < <(pc_cli)
+  ((${#cli[@]} > 0)) || {
+    pc_fail "No Paperclip CLI and no npx. Run setup first."
+    return 1
+  }
+  if command -v omarchy-launch-terminal >/dev/null 2>&1; then
+    setsid omarchy-launch-terminal -- "${cli[@]}" run >/dev/null 2>&1 &
+  elif command -v xdg-terminal-exec >/dev/null 2>&1; then
+    setsid xdg-terminal-exec -- "${cli[@]}" run >/dev/null 2>&1 &
+  else
+    pc_fail "No terminal to run 'paperclipai run' in."
+    return 1
+  fi
+  disown 2>/dev/null || true
+}
+
+case $action in
+start)
+  if pc_health_ok; then
+    say "Paperclip is already running."
+    exit 0
+  fi
+  if service_installed; then
+    say "Starting paperclipai.service…"
+    pc_run_cli service start >/dev/null 2>&1 || systemctl --user start paperclipai.service
+  else
+    say "No background service — running Paperclip in a terminal."
+    run_in_terminal || exit 1
+  fi
+  if pc_wait_for_health 60; then
+    say "Paperclip is answering on $(pc_api_base)."
+    exit 0
+  fi
+  pc_fail "Paperclip did not come up."
+  pc_notify critical "󰀦" "Paperclip did not start" "Run the doctor to find out why." \
+    --exec "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-doctor"
+  exit 1
+  ;;
+stop)
+  if service_installed; then
+    pc_run_cli service stop >/dev/null 2>&1 || systemctl --user stop paperclipai.service
+    say "Stopped paperclipai.service."
+  else
+    pc_warn "No background service installed; stop the terminal running 'paperclipai run'."
+    exit 1
+  fi
+  ;;
+restart)
+  if service_installed; then
+    say "Restarting paperclipai.service…"
+    pc_run_cli service restart >/dev/null 2>&1 || systemctl --user restart paperclipai.service
+    pc_wait_for_health 60 || {
+      pc_fail "Paperclip did not come back."
+      exit 1
+    }
+    say "Paperclip is answering on $(pc_api_base)."
+  else
+    pc_warn "No background service installed. Install it with: $0 install"
+    exit 1
+  fi
+  ;;
+install)
+  pc_run_cli service install || {
+    pc_fail "Could not install the background service."
+    exit 1
+  }
+  pc_wait_for_health 90 && say "Paperclip is answering on $(pc_api_base)."
+  ;;
+status)
+  pc_status | jq -r '"state:   \(.state)\nsummary: \(.summary)\nservice: \(.service.activeState // "unknown") (installed: \(.service.installed))\napi:     \(.apiBase)"' 2>/dev/null
+  ;;
+*)
+  pc_fail "Unknown action: $action (use start, stop, restart, install or status)"
+  exit 1
+  ;;
+esac

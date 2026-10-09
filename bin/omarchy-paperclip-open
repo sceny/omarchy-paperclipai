@@ -1,0 +1,57 @@
+#!/bin/bash
+# Open Paperclip, or one task inside it.
+#
+# Usage:
+#   omarchy-paperclip-open [--new-window] [url]
+#
+# One Paperclip window is the rule. A click in the bar, in the panel or on a
+# notification raises the web app window that is already open; only when none
+# is open does this start one. --new-window asks for a second window on
+# purpose, which is what the panel sends when you hold Shift.
+#
+# A raised window stays on the page it was on: a browser web app window takes
+# no url from outside once it runs. So the url here decides where a *new*
+# window lands, nothing more.
+#
+# --focus is still accepted, and now means the same as no flag at all.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+new_window=false
+while [[ ${1:-} == -* ]]; do
+  case $1 in
+  --new-window | --new) new_window=true ;;
+  --focus) ;;
+  *)
+    pc_fail "Unknown option: $1"
+    exit 1
+    ;;
+  esac
+  shift
+done
+
+url=${1:-}
+[[ -n $url ]] || url=$(pc_api_base)
+
+# Only http(s) reaches a browser. A url from the API is data, not a command.
+if [[ ! ${url,,} =~ ^https?:// ]]; then
+  pc_fail "Refusing to open a non-http url: $url"
+  exit 1
+fi
+
+if [[ $new_window == false ]] && pc_focus_webapp_window; then
+  exit 0
+fi
+
+if command -v omarchy-launch-webapp >/dev/null 2>&1; then
+  exec omarchy-launch-webapp "$url"
+fi
+
+if command -v omarchy-launch-browser >/dev/null 2>&1; then
+  exec omarchy-launch-browser "$url"
+fi
+
+exec xdg-open "$url"

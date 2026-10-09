@@ -1,0 +1,561 @@
+#!/usr/bin/env python3
+"""Print one JSON object describing the local Paperclip instance.
+
+This is the only place that talks to the Paperclip API. The bar widget, the
+setup script and the doctor all read this contract instead of each building
+their own view of "is it up, is it busy, does it need me".
+
+The probe never fails loudly: an instance that is missing, stopped, or
+unreachable is a normal answer with a `state` the widget can draw. Exit code 0
+means "here is the truth", exit code 2 means the probe itself broke.
+
+Contract (schemaVersion 1):
+
+    {
+      "schemaVersion": 1,
+      "generatedAt": "2026-10-09T17:00:00Z",
+      "state": "needs-you|working|idle|stopped|not-installed|needs-auth",
+      "summary": "5 need you",
+      "apiBase": "http://127.0.0.1:3100",
+      "instance": "default",
+      "reachable": true,
+      "authRequired": false,
+      "cli": { "installed": true, "path": "...", "npx": true },
+      "health": { "status": "ok", "version": "...", "bootstrapStatus": "ready" },
+      "service": { "supported": true, "active": true, "enabled": true, ... },
+      "webapp": { "installed": true, "path": "...", "name": "Paperclip" },
+      "attention": 5, "working": 3, "failedRuns": 2,
+      "inboxFilter": "needs-me", "inboxTotal": 5, "inboxShown": 5,
+      "inboxCounts": { "failed_run": 2, ... }, "retryableCount": 2,
+      "companies": [ { "id", "name", "prefix", "attention", "working" } ],
+      "needs":  [ { "key", "title", "detail", "severity", "kind", "url",
+                    "itemKey", "retryable", "retryKind", "agentId", "runId",
+                    "issueId", "actionId", "hidden", "snoozedUntil" } ],
+      "moving": [ { "key", "title", "detail", "url" } ],
+      "problems": [ "..." ]
+    }
+
+`attention` is the number of open inbox rows the same query returned — never
+`deskBadgeCount`, which counts rows that are *new today* and so falls to zero
+at midnight whether or not anybody did the work. The bar bubble is the length
+of a list, and this is that list.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+SCHEMA_VERSION = 1
+DEFAULT_API_BASE = "http://127.0.0.1:3100"
+DEFAULT_WEBAPP_NAME = "Paperclip"
+# More than a handful of companies on one desktop is a power user; the bar can
+# only show so much, and every extra company costs four API calls per poll.
+MAX_COMPANIES = 4
+LIVE_RUN_STATES = ("running", "queued", "starting")
+# The API never returns more than 100 rows in one page, and one page is enough:
+# `totalCount` and `countsBySourceKind` are computed over the whole feed, so the
+# counts stay honest even when the rows are cut off.
+MAX_INBOX_FETCH = 100
+# Inbox rows that represent a failed attempt, and the write the plugin repeats
+# for each. Everything else in the feed is waiting on a person's decision and
+# has nothing to repeat.
+RETRY_KINDS = {"failed_run": "run", "recovery_action": "recovery"}
+# "Error" means error, not "an error that happened to be in the feed". The
+# notification filter reads this list directly.
+ERROR_KINDS = ("failed_run", "agent_error_alert", "recovery_action")
+INBOX_FILTERS = ("needs-me", "all")
+
+
+def env(name: str, fallback: str = "") -> str:
+    value = os.environ.get(name)
+    return value.strip() if value else fallback
+
+
+def home() -> str:
+    return os.path.expanduser("~")
+
+
+def state_dir() -> str:
+    base = env("XDG_STATE_HOME") or os.path.join(home(), ".local", "state")
+    return os.path.join(base, "omarchy", "paperclipai")
+
+
+def instance_dir(instance: str) -> str:
+    root = env("PAPERCLIP_DATA_DIR") or os.path.join(home(), ".paperclip")
+    return os.path.join(root, "instances", instance)
+
+
+def read_json_file(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def resolve_api_base(cli_value: str, instance: str) -> str:
+    """Find the instance's URL without guessing when we can read it."""
+    if cli_value:
+        return cli_value.rstrip("/")
+    from_env = env("PAPERCLIP_OMARCHY_API_BASE")
+    if from_env:
+        return from_env.rstrip("/")
+    runtime = read_json_file(os.path.join(instance_dir(instance), "runtime-info.json"))
+    if isinstance(runtime, dict):
+        url = str(runtime.get("dashboardUrl") or "").strip()
+        if url:
+            return url.rstrip("/")
+        host = str(runtime.get("host") or "").strip()
+        port = runtime.get("port")
+        if host and port:
+            return "http://%s:%s" % (host, port)
+    return DEFAULT_API_BASE
+
+
+def read_token() -> str:
+    """Bearer token for an instance that is not in local trusted mode."""
+    from_env = env("PAPERCLIP_OMARCHY_TOKEN")
+    if from_env:
+        return from_env
+    for name in ("token", "board-token"):
+        path = os.path.join(state_dir(), name)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                token = handle.read().strip()
+                if token:
+                    return token
+        except OSError:
+            continue
+    return ""
+
+
+class Api:
+    """Minimal GET client. Every call answers, none of them raise."""
+
+    def __init__(self, base: str, token: str, timeout: float):
+        self.base = base
+        self.token = token
+        self.timeout = timeout
+        self.auth_required = False
+        self.last_error = ""
+
+    def get(self, path: str):
+        url = self.base + path
+        request = urllib.request.Request(url, method="GET")
+        request.add_header("Accept", "application/json")
+        if self.token:
+            request.add_header("Authorization", "Bearer " + self.token)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                body = response.read()
+            return json.loads(body.decode("utf-8", "replace"))
+        except urllib.error.HTTPError as error:
+            if error.code in (401, 403):
+                self.auth_required = True
+            self.last_error = "HTTP %s on %s" % (error.code, path)
+            return None
+        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as error:
+            self.last_error = "%s on %s" % (type(error).__name__, path)
+            return None
+
+
+def systemd_service(unit: str, timeout: float) -> dict:
+    """Read the user unit's state, or say why we cannot."""
+    out = {"unit": unit, "supported": False, "active": False, "enabled": False, "installed": False}
+    if not shutil.which("systemctl"):
+        out["reason"] = "systemctl not found"
+        return out
+    if not env("XDG_RUNTIME_DIR") and not env("DBUS_SESSION_BUS_ADDRESS"):
+        out["reason"] = "no session bus"
+        return out
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "show", unit,
+             "--property=LoadState", "--property=ActiveState", "--property=UnitFileState"],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        out["reason"] = "systemctl failed"
+        return out
+    if result.returncode != 0:
+        out["reason"] = (result.stderr or "systemctl failed").strip().splitlines()[:1][0][:160]
+        return out
+    values = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            values[key.strip()] = value.strip()
+    out["supported"] = True
+    out["installed"] = values.get("LoadState") == "loaded"
+    out["active"] = values.get("ActiveState") == "active"
+    out["enabled"] = values.get("UnitFileState") in ("enabled", "enabled-runtime", "static")
+    out["activeState"] = values.get("ActiveState", "")
+    return out
+
+
+def find_cli() -> dict:
+    """Where is paperclipai, and can we fall back to npx?"""
+    path = shutil.which("paperclipai") or ""
+    if not path:
+        candidate = os.path.join(home(), ".local", "bin", "paperclipai")
+        if os.access(candidate, os.X_OK):
+            path = candidate
+    return {"installed": bool(path), "path": path, "npx": bool(shutil.which("npx"))}
+
+
+def webapp(name: str) -> dict:
+    path = os.path.join(home(), ".local", "share", "applications", name + ".desktop")
+    return {"name": name, "path": path, "installed": os.path.isfile(path)}
+
+
+def short(text, limit: int = 120) -> str:
+    value = " ".join(str(text or "").split())
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def age(iso: str, now: float) -> str:
+    """"4m" / "2h" — how long this has been going on."""
+    text = str(iso or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    seconds = max(0, int(now - parsed.timestamp()))
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm" % (seconds // 60)
+    if seconds < 86400:
+        return "%dh" % (seconds // 3600)
+    return "%dd" % (seconds // 86400)
+
+
+def as_list(payload, key: str):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
+    """One attention row, projected down to what the widget can draw and act on.
+
+    The write path needs ids, not a URL: a failed run is retried through its
+    agent and run id, a recovery hand-back through its task and action id, and
+    both dismiss and snooze go through the row's own `dismissalKey`.
+    """
+    subject = raw.get("subject") if isinstance(raw.get("subject"), dict) else {}
+    meta = subject.get("metadata") if isinstance(subject.get("metadata"), dict) else {}
+    related = raw.get("relatedIssue") if isinstance(raw.get("relatedIssue"), dict) else {}
+    kind = str(raw.get("sourceKind") or "")
+    retry_kind = RETRY_KINDS.get(kind, "")
+
+    href = str(subject.get("href") or related.get("href") or "")
+    dismissal = raw.get("dismissal") if isinstance(raw.get("dismissal"), dict) else None
+    # The server nests the snooze in the dismissal:
+    # {"kind": "snooze", "snoozedUntil": ...}. Without reading it there, a
+    # snoozed row reads as cleared under the All filter.
+    snoozed = str(raw.get("snoozedUntil") or (dismissal or {}).get("snoozedUntil") or "")
+
+    row = {
+        "key": str(raw.get("id") or raw.get("dedupKey") or "%s:%s" % (kind, subject.get("id"))),
+        "kind": kind,
+        # A failed run has no identifier of its own, so it borrows the task's:
+        # "SCE-250 Kai run failed" is traceable, "Kai run failed" is not.
+        "identifier": str(subject.get("identifier") or related.get("identifier") or ""),
+        "title": short(subject.get("title") or kind or "Needs you"),
+        "detail": short(raw.get("whyNow") or "", 110),
+        "severity": str(raw.get("severity") or "normal"),
+        "company": str(company.get("name") or ""),
+        "companyId": str(company.get("id") or ""),
+        "ago": age(raw.get("activityAt") or raw.get("updatedAt") or "", now),
+        "url": (api.base + href) if href.startswith("/") else href,
+        "itemKey": str(raw.get("dismissalKey") or ""),
+        "retryKind": retry_kind,
+        "retryable": bool(retry_kind),
+        "isError": kind in ERROR_KINDS,
+        "agentId": "",
+        "runId": "",
+        "issueId": "",
+        "actionId": "",
+        "snoozedUntil": snoozed,
+        "hidden": bool(snoozed) or bool(dismissal),
+    }
+
+    if kind == "failed_run":
+        row["runId"] = str(subject.get("id") or "")
+        row["agentId"] = str(meta.get("agentId") or "")
+        row["issueId"] = str(meta.get("issueId") or related.get("id") or "")
+    elif kind == "recovery_action":
+        row["actionId"] = str(subject.get("id") or "")
+        row["issueId"] = str(meta.get("sourceIssueId") or related.get("id") or "")
+    elif subject.get("kind") == "issue":
+        row["issueId"] = str(subject.get("id") or "")
+
+    # A retry needs every id its call takes. Advertising a button that cannot
+    # be pressed is worse than not drawing one.
+    if retry_kind == "run" and not (row["agentId"] and row["runId"]):
+        row["retryable"] = False
+        row["retryKind"] = ""
+    if retry_kind == "recovery" and not (row["issueId"] and row["actionId"]):
+        row["retryable"] = False
+        row["retryKind"] = ""
+    return row
+
+
+def company_needs(api: Api, company: dict, keep: int, now: float, inbox_filter: str):
+    """The open inbox: the things that are waiting for a person.
+
+    Returns (total, countsBySourceKind, rows). `total` is the whole feed under
+    this filter, `rows` is the first `keep` of it in the server's decide order.
+
+    `keep` caps the rows asked for, not the count: the server computes
+    `totalCount` and `countsBySourceKind` over the whole feed before it cuts
+    the page. So a small page still carries an honest number, and a bar widget
+    polling every twenty seconds does not have to pull a hundred enriched rows
+    to know there are a hundred and forty-seven.
+    """
+    cid = company.get("id")
+    query = "/api/companies/%s/attention?sort=decide&limit=%d" % (cid, keep)
+    if inbox_filter == "all":
+        # Also show what you snoozed or cleared, so a row cleared by mistake is
+        # findable. These are still open rows you hid, not a notification history.
+        query += "&includeDismissed=true"
+    feed = api.get(query)
+    if not isinstance(feed, dict):
+        # A timeout here used to read as "nothing is waiting", which quietly
+        # shrinks the number the bubble shows. Say the call failed instead.
+        return None, {}, []
+    total = int(feed.get("totalCount") or 0)
+    counts = feed.get("countsBySourceKind")
+    counts = counts if isinstance(counts, dict) else {}
+    rows = []
+    for raw in as_list(feed, "items")[:keep]:
+        if isinstance(raw, dict):
+            rows.append(inbox_row(api, company, raw, now))
+    return total, counts, rows
+
+
+def company_moving(api: Api, company: dict, limit: int, now: float):
+    """Live runs, named by the agent and the task they are working on."""
+    cid = company.get("id")
+    runs = as_list(api.get("/api/companies/%s/heartbeat-runs?limit=40" % cid), "runs")
+    live = [r for r in runs if isinstance(r, dict) and str(r.get("status")) in LIVE_RUN_STATES]
+    failed = sum(1 for r in runs if isinstance(r, dict) and str(r.get("status")) == "failed")
+    if not live:
+        return 0, [], failed
+
+    names = {}
+    for agent in as_list(api.get("/api/companies/%s/agents" % cid), "agents"):
+        if isinstance(agent, dict) and agent.get("id"):
+            names[agent["id"]] = str(agent.get("name") or "")
+
+    by_run = {}
+    issues = as_list(
+        api.get("/api/companies/%s/issues?status=in_progress&view=compact&limit=50" % cid),
+        "issues",
+    )
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("executionRunId"):
+            by_run[issue["executionRunId"]] = issue
+
+    rows = []
+    for run in live:
+        issue = by_run.get(run.get("id")) or {}
+        agent = names.get(run.get("agentId")) or "An agent"
+        identifier = str(issue.get("identifier") or "")
+        title = short(issue.get("title") or "working", 90)
+        href = str(issue.get("href") or "")
+        if not href and identifier and company.get("issuePrefix"):
+            href = "/%s/issues/%s" % (company["issuePrefix"], identifier)
+        detail = agent
+        elapsed = age(run.get("startedAt") or "", now)
+        if elapsed:
+            detail += " · " + elapsed
+        if str(run.get("status")) != "running":
+            detail += " · " + str(run.get("status"))
+        rows.append({
+            "key": "run:" + str(run.get("id") or ""),
+            "identifier": identifier,
+            "title": title,
+            "detail": detail,
+            "agent": agent,
+            "company": str(company.get("name") or ""),
+            "url": (api.base + href) if href.startswith("/") else href,
+        })
+    rows.sort(key=lambda row: row.get("identifier") or "")
+    return len(live), rows[:limit], failed
+
+
+def derive_state(report: dict) -> None:
+    """One word for the bar icon, one line for the panel."""
+    if not report["cli"]["installed"] and not report["instanceExists"]:
+        report["state"] = "not-installed"
+        report["summary"] = "Paperclip is not set up"
+    elif not report["reachable"]:
+        report["state"] = "stopped"
+        report["summary"] = "Paperclip is not running"
+    elif report["authRequired"]:
+        report["state"] = "needs-auth"
+        report["summary"] = "Paperclip needs a token"
+    elif report["attention"] > 0:
+        report["state"] = "needs-you"
+        report["summary"] = "%d need%s you" % (report["attention"], "s" if report["attention"] == 1 else "")
+    elif report["working"] > 0:
+        report["state"] = "working"
+        report["summary"] = "%d agent%s working" % (report["working"], "" if report["working"] == 1 else "s")
+    else:
+        report["state"] = "idle"
+        report["summary"] = "All quiet"
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(add_help=True, description=__doc__.splitlines()[0])
+    parser.add_argument("--api-base", default="", help="Paperclip API base URL")
+    parser.add_argument("--instance", default="", help="local instance id (default: default)")
+    parser.add_argument("--items", type=int, default=6, help="live-run rows (default: 6)")
+    parser.add_argument("--inbox-items", type=int, default=20,
+                        help="inbox rows to ask for, 1-100 (default: 20). The counts are "
+                             "over the whole feed either way.")
+    parser.add_argument("--inbox-filter", default="needs-me", choices=list(INBOX_FILTERS),
+                        help="needs-me: the open inbox. all: also what you snoozed or cleared.")
+    # The attention feed is the slowest call the probe makes: the server ranks
+    # the whole inbox before it answers, and a long inbox is the case this
+    # plugin exists for. Three seconds was short enough to time out and report
+    # an empty one.
+    parser.add_argument("--timeout", type=float, default=6.0, help="per-request timeout seconds")
+    parser.add_argument("--webapp-name", default="", help="web app launcher name")
+    parser.add_argument("--compact", action="store_true", help="print one line of JSON")
+    args = parser.parse_args(argv)
+
+    instance = args.instance or env("PAPERCLIP_OMARCHY_INSTANCE", "default")
+    api = Api(resolve_api_base(args.api_base, instance), read_token(), max(0.5, args.timeout))
+    name = args.webapp_name or env("PAPERCLIP_OMARCHY_WEBAPP_NAME", DEFAULT_WEBAPP_NAME)
+    now = time.time()
+    items = max(1, min(25, args.items))
+    inbox_items = max(1, min(MAX_INBOX_FETCH, args.inbox_items))
+    inbox_filter = args.inbox_filter
+
+    report = {
+        "schemaVersion": SCHEMA_VERSION,
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "apiBase": api.base,
+        "instance": instance,
+        "instanceExists": os.path.isdir(instance_dir(instance)),
+        "cli": find_cli(),
+        "service": systemd_service(env("PAPERCLIP_OMARCHY_UNIT", "paperclipai.service"), 3.0),
+        "webapp": webapp(name),
+        "reachable": False,
+        "authRequired": False,
+        "health": {},
+        "attention": 0,
+        "working": 0,
+        "failedRuns": 0,
+        "inboxFilter": inbox_filter,
+        "inboxTotal": 0,
+        "inboxShown": 0,
+        "inboxCounts": {},
+        "retryableCount": 0,
+        "inboxStale": False,
+        "companies": [],
+        "needs": [],
+        "moving": [],
+        "problems": [],
+    }
+
+    health = api.get("/api/health")
+    if isinstance(health, dict):
+        report["reachable"] = True
+        report["health"] = {
+            "status": str(health.get("status") or ""),
+            "version": str(health.get("version") or ""),
+            "bootstrapStatus": str(health.get("bootstrapStatus") or ""),
+            "deploymentMode": str(health.get("deploymentMode") or ""),
+            "authReady": bool(health.get("authReady")),
+        }
+        if str(health.get("status")) != "ok":
+            report["problems"].append("Instance health is '%s'" % health.get("status"))
+        if str(health.get("bootstrapStatus") or "ready") != "ready":
+            report["problems"].append("Setup is unfinished (%s)" % health.get("bootstrapStatus"))
+    elif api.last_error:
+        report["problems"].append(api.last_error)
+
+    if report["reachable"]:
+        companies = as_list(api.get("/api/companies"), "companies")
+        for company in companies[:MAX_COMPANIES]:
+            if not isinstance(company, dict) or not company.get("id"):
+                continue
+            attention, counts, needs = company_needs(api, company, inbox_items, now, inbox_filter)
+            if attention is None:
+                report["problems"].append(
+                    "Could not read %s's inbox (%s), so the count is incomplete"
+                    % (company.get("name") or "a company", api.last_error or "no answer"))
+                report["inboxStale"] = True
+                attention = 0
+            working, moving, failed = company_moving(api, company, items, now)
+            report["attention"] += attention
+            report["working"] += working
+            report["failedRuns"] += failed
+            report["needs"].extend(needs)
+            report["moving"].extend(moving)
+            for kind, value in counts.items():
+                try:
+                    report["inboxCounts"][kind] = report["inboxCounts"].get(kind, 0) + int(value)
+                except (TypeError, ValueError):
+                    continue
+            report["companies"].append({
+                "id": str(company.get("id")),
+                "name": str(company.get("name") or ""),
+                "prefix": str(company.get("issuePrefix") or ""),
+                "attention": attention,
+                "working": working,
+            })
+        report["authRequired"] = api.auth_required
+        if api.auth_required:
+            report["problems"].append("This instance wants a board token (see README: tokens)")
+        # No client-side re-sort. The server ranked these in decide order; a
+        # second sort here is how the list stopped matching the number.
+        report["inboxTotal"] = report["attention"]
+        report["needs"] = report["needs"][:inbox_items]
+        report["inboxShown"] = len(report["needs"])
+        report["retryableCount"] = int(report["inboxCounts"].get("failed_run", 0))
+        report["moving"] = report["moving"][:items]
+
+    derive_state(report)
+    if not report["webapp"]["installed"] and report["reachable"]:
+        report["problems"].append("No web app launcher yet (run omarchy-paperclip-webapp)")
+
+    text = json.dumps(report) if args.compact else json.dumps(report, indent=2)
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as error:  # the widget must always get JSON back
+        print(json.dumps({
+            "schemaVersion": SCHEMA_VERSION,
+            "state": "probe-failed",
+            "summary": "Status probe failed",
+            "problems": ["%s: %s" % (type(error).__name__, error)],
+        }))
+        sys.exit(2)

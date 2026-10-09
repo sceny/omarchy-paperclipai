@@ -1,0 +1,60 @@
+#!/bin/bash
+# Keep the panel's snooze and focus state across shell restarts.
+#
+# Usage:
+#   omarchy-paperclip-snooze get
+#   omarchy-paperclip-snooze set <1h|morning|none> <until-ms> <focus-until-ms>
+#
+# This is storage and nothing else. The clock arithmetic, the precedence between
+# a snooze and a focus session, and what each state looks like all live in
+# Model.js, where they are tested; this file only remembers the answer. `get`
+# always prints one JSON object and always exits 0, so a missing or damaged
+# file reads as "not snoozed" rather than as an error the bar has to explain.
+
+set -uo pipefail
+
+# shellcheck source=../lib/common.sh
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
+
+file=${PAPERCLIP_STATE_DIR}/snooze.json
+empty='{"step":"","until":0,"focusUntil":0}'
+
+is_ms() { [[ $1 =~ ^[0-9]{1,16}$ ]]; }
+
+case ${1:-get} in
+get)
+  if [[ -r $file ]] && jq -ce '{step: (.step // ""), until: (.until // 0), focusUntil: (.focusUntil // 0)}' "$file" 2>/dev/null; then
+    exit 0
+  fi
+  printf '%s\n' "$empty"
+  ;;
+set)
+  step=${2:-}
+  until_ms=${3:-}
+  focus_ms=${4:-}
+  case $step in
+  1h | morning | none) ;;
+  *)
+    pc_fail "Usage: omarchy-paperclip-snooze set <1h|morning|none> <until-ms> <focus-until-ms>"
+    exit 1
+    ;;
+  esac
+  if ! is_ms "$until_ms" || ! is_ms "$focus_ms"; then
+    pc_fail "The end times are whole milliseconds since the epoch, or 0."
+    exit 1
+  fi
+  [[ $step == none ]] && step=""
+  dir=$(pc_state_dir)
+  tmp=$(mktemp "$dir/snooze.XXXXXX") || exit 1
+  jq -nc --arg step "$step" --argjson until "$until_ms" --argjson focus "$focus_ms" \
+    '{step: $step, until: $until, focusUntil: $focus}' >"$tmp" && mv -f "$tmp" "$file" || {
+    rm -f "$tmp"
+    exit 1
+  }
+  cat "$file"
+  ;;
+*)
+  pc_fail "Unknown command: $1"
+  exit 1
+  ;;
+esac

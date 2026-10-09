@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "id": "sceny.paperclipai",
+  "name": "Paperclip",
+  "version": "0.2.0",
+  "author": "Sceny",
+  "license": "MIT",
+  "homepage": "https://github.com/sceny/omarchy-paperclipai",
+  "description": "Paperclip AI in the Omarchy bar: what your agents are doing, what is waiting for you, and a setup that keeps the instance running.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Paperclip",
+    "description": "One paperclip in the bar for your Paperclip instance: it turns urgent when something needs you, carries a light while agents work, and opens a panel to open, start or repair it.",
+    "category": "AI",
+    "aliases": ["paperclip", "paperclipai"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "notifications": "Needs-me",
+      "inboxFilter": "needs-me",
+      "retryAllLimit": 20,
+      "autoStart": "On",
+      "showCount": "On",
+      "animations": "On",
+      "refreshIntervalSec": 20,
+      "instance": "",
+      "apiBase": ""
+    },
+    "schema": [
+      {
+        "key": "notifications",
+        "type": "enum",
+        "label": "Desktop notifications",
+        "options": ["Off", "Needs-me", "Everything"],
+        "defaultValue": "Needs-me",
+        "description": "Needs-me: something waits on you, a run failed, or the instance died. Everything: also when the instance starts and agents pick up work. Notifications live in Omarchy's notification centre, which is where their history is."
+      },
+      {
+        "key": "inboxFilter",
+        "type": "enum",
+        "label": "Rows the panel lists",
+        "options": ["Needs-me", "All"],
+        "defaultValue": "Needs-me",
+        "description": "Needs-me: the open inbox, which reaches zero when you clear it. All: also what you snoozed or cleared, so a row cleared by mistake is findable. The bar bubble always counts the rows this filter lists."
+      },
+      {
+        "key": "retryAllLimit",
+        "type": "integer",
+        "label": "Try again: rows per press",
+        "min": 1,
+        "max": 100,
+        "defaultValue": 20,
+        "step": 5,
+        "description": "Retry all works through this many failed runs per press, one at a time. The rest stay in the list for the next press."
+      },
+      {
+        "key": "autoStart",
+        "type": "enum",
+        "label": "Keep Paperclip running",
+        "options": ["On", "Off"],
+        "defaultValue": "On",
+        "description": "Start the background service again when the instance is found down (at most once every ten minutes)."
+      },
+      {
+        "key": "showCount",
+        "type": "enum",
+        "label": "Show the count in the bubble",
+        "options": ["On", "Off"],
+        "defaultValue": "On",
+        "description": "Off keeps the bubble but drops the number."
+      },
+      {
+        "key": "animations",
+        "type": "enum",
+        "label": "Animations",
+        "options": ["On", "Off"],
+        "defaultValue": "On",
+        "description": "Off keeps the same layout and colors and only removes the movement: the panel's fade-in, the travelling light on the icon and the pulse on the bubble."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 600,
+        "step": 5,
+        "defaultValue": 20,
+        "description": "The open panel refreshes at least every 10 seconds."
+      },
+      {
+        "key": "instance",
+        "type": "string",
+        "label": "Instance id",
+        "defaultValue": "",
+        "description": "Leave empty for the default local instance."
+      },
+      {
+        "key": "apiBase",
+        "type": "string",
+        "label": "API base URL",
+        "defaultValue": "",
+        "description": "Leave empty to read the URL from the instance's runtime-info.json."
+      }
+    ]
+  }
+}
