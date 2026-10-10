@@ -17,6 +17,36 @@ Disable keeps the files; remove deletes them. Both survive being run twice.
 The shell side lives in `bin/`: `omarchy-paperclip-status`, `-service`,
 `-setup`, `-doctor`, `-open`, `-webapp`, `-agent`, `-inbox` and `-skills`.
 
+## Following `develop` (maintainers)
+
+`omarchy plugin update` fetches the default branch, `main`, so it never brings
+merged work from `develop`. The owner's installs of `sceny.devices` and
+`sceny.paperclipai` are git checkouts on `develop`, and a user timer keeps them
+there with no agent run:
+
+```sh
+dev/follow-develop install     # copies the script to ~/.local/share/sceny-plugins/
+                               # and enables sceny-plugins-follow-develop.timer
+dev/follow-develop status      # next run, last log lines
+dev/follow-develop uninstall   # timer and script gone
+```
+
+Every 5 minutes (and 2 minutes after login) it fetches `origin/develop` for
+each plugin, fast-forwards the install, runs `omarchy-plugin-validate`, rolls
+back if that fails, and asks the shell to rescan once if anything changed. So a
+merge into `develop` is live within about five minutes. The record is one JSON
+line per plugin per pass in `~/.local/state/sceny-plugins/follow-develop.jsonl`,
+also in `journalctl --user -u sceny-plugins-follow-develop`.
+
+- It only moves a checkout that is clean and on `develop`. A feature branch,
+  local changes, a symlink (`sceny.diction`) or a non-git copy is left alone and
+  logged as `skipped`. Other plugins are not in its list (`FOLLOW_PLUGINS`).
+- **Never leave an install on a feature branch for a live check.** The timer
+  skips it, so it silently stops following. Use `dev/rig`.
+- A pass that cannot fast-forward or fails validation exits non-zero, so
+  `systemctl --user --failed` shows it.
+- `test/test_follow_develop.sh` tests it against throwaway repos.
+
 ## Snooze and focus
 
 Four states, shown in the panel's strip and on the bar icon (a zzz replaces the
