@@ -1112,8 +1112,8 @@ Panel {
       hoverEnabled: true
       cursorShape: rowItem.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
       onEntered: root.setRowCursor(rowItem.rowOffset)
-      // Shift is the one way to ask for a second window; a plain click keeps
-      // working in the Paperclip window that is already open.
+      // A row's url opens in a window of its own, so the click always shows
+      // the item. Shift forces a window for the board url too.
       onClicked: function(mouse) {
         if (rowItem.row && rowItem.row.url)
           service.openUrl(rowItem.row.url, (mouse.modifiers & Qt.ShiftModifier) !== 0)

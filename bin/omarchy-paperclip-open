@@ -4,16 +4,19 @@
 # Usage:
 #   omarchy-paperclip-open [--new-window] [url]
 #
-# One Paperclip window is the rule. A click in the bar, in the panel or on a
-# notification raises the web app window that is already open; only when none
-# is open does this start one. --new-window asks for a second window on
-# purpose, which is what the panel sends when you hold Shift.
+# The url decides what a click does:
 #
-# A raised window stays on the page it was on: a browser web app window takes
-# no url from outside once it runs. So the url here decides where a *new*
-# window lands, nothing more.
+#   * No url, or the board itself: raise the web app window that is already
+#     open, and only start one when none is.
+#   * A url inside the board (an issue, a run, an approval): open it in a web
+#     app window of its own. A browser web app window takes no url from
+#     outside once it runs, so raising the old window would leave the user on
+#     whatever page it showed, and the click would seem to do nothing. The
+#     browser maps the new window, so the compositor focuses it and the plugin
+#     dispatches no focus (which warps the pointer to the window's middle).
 #
-# --focus is still accepted, and now means the same as no flag at all.
+# --new-window asks for a window of its own for any url, which is what the
+# panel sends when you hold Shift. --focus is still accepted and means no flag.
 
 set -uo pipefail
 
@@ -42,8 +45,8 @@ if [[ ! ${url,,} =~ ^https?:// ]]; then
   exit 1
 fi
 
-if [[ $new_window == false ]] && pc_focus_webapp_window; then
-  exit 0
+if [[ ${url%/} == "$(pc_api_base)" ]]; then
+  [[ $new_window == false ]] && pc_focus_webapp_window && exit 0
 fi
 
 if command -v omarchy-launch-webapp >/dev/null 2>&1; then
