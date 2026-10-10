@@ -47,7 +47,7 @@ rig_proc_start() {
   # rig_proc_start <pid> — field 22 of /proc/<pid>/stat (start time in ticks).
   # Together with the pid it names one process for the life of the machine.
   local stat
-  stat=$(<"/proc/$1/stat") 2>/dev/null || return 1
+  { stat=$(<"/proc/$1/stat"); } 2>/dev/null || return 1
   stat=${stat##*) } # comm may hold spaces and parens; everything after the last ")" is fixed
   [[ ${stat%% *} != [ZX] ]] || return 1 # a zombie is dead; its owner is not coming back
   # shellcheck disable=SC2086
@@ -67,7 +67,7 @@ rig_pid_is() {
 
 rig_ppid() {
   local stat
-  stat=$(<"/proc/$1/stat") 2>/dev/null || return 1
+  { stat=$(<"/proc/$1/stat"); } 2>/dev/null || return 1
   stat=${stat##*) }
   # shellcheck disable=SC2086
   set -- $stat

@@ -26,7 +26,7 @@
 # What it guarantees, and why it exists:
 #
 #   * HIDDEN BY DEFAULT. The Omarchy shell under test runs in its own Hyprland,
-#     inside a headless Wayland parent (cage). Nothing is mapped on any monitor
+#     inside a headless Wayland parent (labwc). Nothing is mapped on any monitor
 #     of the owner's session: no window on their workspaces, no moved or
 #     retiled windows, no stolen focus. Screenshots and shell IPC work while
 #     hidden. A window appears only on `dev/rig show` (or `up --visible`), and
@@ -106,7 +106,11 @@ RIG_UP_SUCCEEDED=0
 rig_up_cleanup_on_failure() {
   ((RIG_UP_SUCCEEDED)) && return 0
   rig_warn "bringing the rig up failed — tearing down what started"
-  rig_teardown
+  # Logs are the only way to see why. One fixed directory, overwritten by the
+  # next failure, so a failed run leaves no pile behind.
+  local keep="$RIG_TMP_ROOT/last-failed-up"
+  rm -rf "$keep"
+  rig_teardown "$keep"
 }
 
 cmd_up() {

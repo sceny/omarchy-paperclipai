@@ -66,7 +66,7 @@ commit is in `skills/upstream.list`.
 ## Testing the plugin
 
 `dev/rig` tests the plugin end to end without touching your desktop or your
-Paperclip instance. It needs `Hyprland`, `cage` (the hidden view), `quickshell`,
+Paperclip instance. It needs `Hyprland`, `labwc` and `wtype` (the hidden view), `quickshell`,
 `omarchy`, `hyprctl`, `grim`, `jq`, `curl`, `git`, `python3`, `ss`, `flock`,
 `setsid`, `prlimit` and the Paperclip CLI. `dev/rig seed` also needs `psql` (the
 `postgresql` package; the rig only uses the client).
@@ -98,16 +98,26 @@ dev/rig selftest               # test the lease, keeper, ps and reap; needs no c
 
 `up`, `ci`, `check`, `seed` and `screenshot` never put a window on your
 workspaces, never move or retile your windows and never take focus. The rig's
-Hyprland runs as the only client of `cage` on wlroots' headless backend
-(`WLR_BACKENDS=headless`), so there is no output of yours for it to appear on.
-`grim` and the shell's IPC talk to the rig's own sockets, so screenshots and
+Hyprland runs as the only client of a private, headless `labwc`
+(`WLR_BACKENDS=headless`, one 1280x720 output, no input devices, private
+`XDG_RUNTIME_DIR`), so there is no output of yours for it to appear on. The
+hidden view is always 1280x720. `grim` and the shell's IPC talk to the rig's own sockets, so screenshots and
 driving the shell work the same hidden. Every `up`, `down` and `check` snapshots
 your session (`hyprctl clients`, `workspaces`, `activeworkspace`, `activewindow`,
 read-only) before and after and prints whether anything changed.
 
-`cage` is a one-time host package (`sudo pacman -S --needed cage`). Without it
-the rig stops and says so. It does not fall back to a window on your desktop or
-to the DRM backend, which would take your GPU and input devices.
+`labwc` and `wtype` are one-time host packages (`sudo pacman -S --needed labwc
+wtype`). Without them the rig stops and says so. It does not fall back to a
+window on your desktop or to the DRM backend, which would take your GPU and
+input devices. `RIG_RENDER_NODE` picks the render node (default: the first
+`/dev/dri/renderD*` whose Mesa EGL initialises).
+
+Start-up note: Hyprland's nested backend sometimes loses a race against the
+parent on its first frame (the parent drops it, or it never draws). The rig
+wakes the parent with a virtual key press (`wtype`, on the rig's private socket
+only), checks that a frame can be captured, and starts the compositor again if
+not, up to 20 times, so `up` can take a few extra seconds. A failed `up` keeps
+its logs in `$RIG_TMP_ROOT/last-failed-up`.
 
 To look at the rig yourself, run `dev/rig show` (or `dev/rig up --visible`). The
 compositor moves into a nested window in your session; `dev/rig hide` moves it
@@ -126,7 +136,7 @@ agent run, or your login shell); `--owner PID` or `RIG_OWNER_PID` names another,
 running rig to a new owner with a fresh TTL.
 
 When the owner ends, crashes or is killed with `kill -9`, or the TTL is up, the
-whole rig goes: compositor, `cage`, shell, Paperclip instance, Postgres and the
+whole rig goes: compositor, `labwc`, shell, Paperclip instance, Postgres and the
 temp and runtime directories. Three things enforce it, so one failing is not a
 leak:
 
@@ -239,7 +249,7 @@ To prove a change crashed nothing: `coredumpctl list /usr/bin/Hyprland --since
 ### Teardown
 
 `dev/rig down` stops the Paperclip instance, the shell, the compositor and
-`cage`, ends anything else that carries the rig's tag, deletes the session and
+`labwc`, ends anything else that carries the rig's tag, deletes the session and
 runtime directories, then proves it: the directories are gone, the Paperclip
 HTTP and Postgres ports are free, the recorded PIDs are gone, no process carries
 the tag or references the session tree, and no rig systemd units exist. It then
@@ -250,7 +260,7 @@ whatever it started; so does `ci`.
 ### CI
 
 `dev/rig ci` runs hidden, so it works on a headless runner as well as under a
-desktop session. It needs `cage`; on a self-hosted runner that belongs in the
+desktop session. It needs `labwc` and `wtype`; on a self-hosted runner that belongs in the
 runner image. `ci` owns its rig: if the job is killed, the keeper ends the rig
 within seconds, and the TTL (30 minutes) is the backstop.
 

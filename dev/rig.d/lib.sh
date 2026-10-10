@@ -498,6 +498,7 @@ rig_teardown() {
     mkdir -p "$out"
     cp -r "$RIG_EVIDENCE/." "$out/" 2>/dev/null || true
     cp -r "$RIG_LOGS" "$out/logs" 2>/dev/null || true
+    cp "$RIG_RUNTIME_DIR"/hypr/*/hyprland.log "$out/logs/hyprland.log" 2>/dev/null || true
     rig_ok "evidence kept in $out"
   fi
 
