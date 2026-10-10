@@ -54,6 +54,13 @@ Panel {
   // The probe's own complaints, shown under the button that acts on them.
   readonly property var problems: service.problems
 
+  // The probe's summary, then the Paperclip version as quiet trailing text.
+  readonly property string summaryLine: {
+    var text = service.report ? service.report.summary : "Checking…"
+    var version = service.report && service.report.health ? String(service.report.health.version || "") : ""
+    return version !== "" ? text + " · v" + version : text
+  }
+
   property bool cursorActive: false
   property int rowIndex: 0
 
@@ -236,6 +243,10 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refresh(); return "ok" }
+    function filterCard(key: string): string {
+      root.cardFilter = Model.toggleTileFilter(root.activeFilter, key)
+      return root.activeFilter === "" ? "none" : root.activeFilter
+    }
     function status(): string { return service.instanceState + " — " + (service.report ? service.report.summary : "") }
     function board(): string { service.openBoard(); return "ok" }
     function doctor(): string { service.runDoctor(); return "ok" }
@@ -263,28 +274,34 @@ Panel {
     // motion — urgent when a person is needed, a light running along the wire
     // while agents work — so the shape itself never changes.
     iconComponent: Component {
-      PaperclipMark {
-        // Sized from the stock bar icon font, like the glyph icons beside it,
-        // so the mark is as tall as they are rather than as tall as the
-        // whole icon canvas.
-        anchors.centerIn: parent
-        width: Style.bar.iconFont
-        height: Style.bar.iconFont
-        thickness: 24
-        color: root.markColor(service.tone)
-        motion: root.motion
-        working: !root.asleep && service.tone === "working"
-        attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+      // The loader resizes its root to the whole icon canvas, so the mark sits
+      // in a root of its own and keeps the size it asks for.
+      Item {
+        PaperclipMark {
+          // Sized from the stock bar icon font, like the glyph icons beside
+          // it, so the mark is as tall as they are rather than as tall as
+          // the whole icon canvas.
+          anchors.centerIn: parent
+          width: Style.bar.iconFont * 0.9
+          height: Style.bar.iconFont * 0.9
+          thickness: 24
+          color: root.markColor(service.tone)
+          motion: root.motion
+          working: !root.asleep && service.tone === "working"
+          attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
 
-        Behavior on color {
-          enabled: root.motion
-          ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+          Behavior on color {
+            enabled: root.motion
+            ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+          }
         }
       }
     }
 
-    // The icon canvas the stock widgets draw in. The bubble and the zzz sit
-    // on its corner, so they stay inside the box the icon occupies.
+    // The icon canvas the stock widgets draw in. The bubble and the zzz hang
+    // from its top edge, so they never rise above the icons beside them; they
+    // reach a little past its right edge, into the button's own padding, so
+    // they sit beside the narrow mark instead of on top of it.
     Item {
       id: iconBox
       anchors.centerIn: parent
@@ -300,6 +317,7 @@ Panel {
       visible: root.asleep
       textFormat: Text.PlainText
       anchors.right: iconBox.right
+      anchors.rightMargin: -Style.space(4)
       anchors.top: iconBox.top
       text: Model.GLYPH_SLEEP
       color: root.bar ? root.bar.barForeground : root.foreground
@@ -315,11 +333,12 @@ Panel {
       visible: !root.asleep && (badge.text !== "" || dotVisible)
       readonly property bool dotVisible: badge.text === "" &&
         (service.working > 0 || service.attention > 0 || service.trouble)
-      width: badge.text !== "" ? Math.max(Style.space(11), badge.implicitWidth + Style.space(5)) : Style.space(5)
-      height: badge.text !== "" ? Style.space(11) : Style.space(5)
+      width: badge.text !== "" ? Math.max(Style.space(10), badge.implicitWidth + Style.space(4)) : Style.space(5)
+      height: badge.text !== "" ? Style.space(10) : Style.space(5)
       radius: height / 2
       color: root.badgeUrgent ? root.urgent : (root.bar ? root.bar.barForeground : root.foreground)
       anchors.right: iconBox.right
+      anchors.rightMargin: -Style.space(4)
       anchors.top: iconBox.top
 
       Behavior on color {
@@ -448,8 +467,7 @@ Panel {
               id: hero
               width: parent.width
               title: "Paperclip"
-              meta: service.actionStatus !== "" ? service.actionStatus
-                                                : (service.report ? service.report.summary : "Checking…")
+              meta: service.actionStatus !== "" ? service.actionStatus : root.summaryLine
               foreground: root.foreground
               fontFamily: root.fontFamily
               iconOpacity: service.trouble ? 0.6 : 1.0
@@ -948,17 +966,6 @@ Panel {
               Text {
                 textFormat: Text.PlainText
                 text: "· " + Model.notificationLabel(service.notifyLevel)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                visible: text !== ""
-                text: service.report && service.report.health && service.report.health.version
-                  ? "· v" + service.report.health.version : ""
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
