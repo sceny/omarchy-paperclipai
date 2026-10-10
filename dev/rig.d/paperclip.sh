@@ -218,7 +218,7 @@ rig_pc_seed() {
   rig_guard_ports
   command -v psql >/dev/null 2>&1 || rig_die "seed: psql is needed for the failed-run row (Arch: postgresql package)"
 
-  local company agent task review question
+  local company agent task review blocked question
   rig_say "Seeding the throwaway instance at $(rig_pc_api_base)"
 
   company=$(rig_pc_api GET /api/companies | jq -r --arg n "$RIG_SEED_COMPANY" '[.[] | select(.name == $n)][0].id // empty') ||
@@ -238,11 +238,13 @@ rig_pc_seed() {
       runtimeConfig: {heartbeat: {enabled: false}}}')" | jq -r '.id') ||
     rig_die "seed: could not create the agent"
 
-  # The failing task: assigning it wakes the agent, the run fails, and the
-  # server blocks the task, which is the blocker row.
+  # The failing task: assigning it wakes the agent and the run fails.
   task=$(rig_seed_issue "$company" "Rig: failing task" \
     "$(jq -nc --arg a "$agent" '{status: "todo", assigneeAgentId: $a}')") ||
     rig_die "seed: could not create the failing task"
+  blocked=$(rig_seed_issue "$company" "Rig: blocked on you" \
+    '{"status":"blocked","unblockDescriptor":{"owner":"board","action":"Rig seed: pick the next step for this task."}}') ||
+    rig_die "seed: could not create the blocked task"
   review=$(rig_seed_issue "$company" "Rig: waiting for review" \
     '{"status":"in_review","assigneeUserId":"local-board"}') ||
     rig_die "seed: could not create the review task"

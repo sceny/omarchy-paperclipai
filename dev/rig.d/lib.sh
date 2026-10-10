@@ -29,6 +29,7 @@ RIG_HOST_HOME=$HOME
 RIG_HOST_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 RIG_HOST_WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
 RIG_HOST_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+RIG_HOST_HYPR_SIG=${HYPRLAND_INSTANCE_SIGNATURE:-}
 
 # The owner's live Paperclip instance. Off limits as a test target, and named
 # here only so the guards can refuse to point at it.
@@ -41,22 +42,26 @@ RIG_OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
 
 # ------------------------------------------------------------- locations ----
 
-RIG_TMP_ROOT=${RIG_TMP_ROOT:-${TMPDIR:-/tmp}/omarchy-plugin-rig}
-RIG_SESSION_LINK="$RIG_TMP_ROOT/$RIG_PLUGIN_ID.current"
+# A fixed root, deliberately NOT $TMPDIR: an agent run gets a private TMPDIR, and
+# a registry that moves with it would hide one run's rig from `dev/rig ps` and
+# `dev/rig reap` in every other run.
+RIG_TMP_ROOT=${RIG_TMP_ROOT:-/tmp/omarchy-plugin-rig-$(id -u)}
+
+# Where the rigs' private XDG_RUNTIME_DIRs go. Short on purpose (see
+# rig_define_paths) and never the owner's /run/user/<uid>.
+RIG_RUNTIME_ROOT=${RIG_RUNTIME_ROOT:-/tmp}
 
 rig_new_session_dir() {
-  local stamp
+  # <plugin>.<utc stamp>.<6 hex>. The last part names the runtime dir too, so
+  # two rigs started in the same second still get different everything.
+  local stamp tag dir
   stamp=$(date -u +%Y%m%d-%H%M%S)
-  printf '%s/%s.%s.%s\n' "$RIG_TMP_ROOT" "$RIG_PLUGIN_ID" "$stamp" "$$"
-}
-
-rig_session_dir() {
-  # The active session, or nothing.
-  [[ -L $RIG_SESSION_LINK ]] || return 1
-  local target
-  target=$(readlink -f "$RIG_SESSION_LINK" 2>/dev/null) || return 1
-  [[ -d $target ]] || return 1
-  printf '%s\n' "$target"
+  while :; do
+    tag=$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')
+    dir="$RIG_TMP_ROOT/$RIG_PLUGIN_ID.$stamp.$tag"
+    [[ -e $dir || -e "$RIG_RUNTIME_ROOT/opr.$tag" ]] || break
+  done
+  printf '%s\n' "$dir"
 }
 
 # --------------------------------------------------------------- sandbox ----
@@ -64,6 +69,7 @@ rig_session_dir() {
 rig_define_paths() {
   # Every path the rig owns, derived from one session dir.
   RIG_SESSION=$1
+  RIG_ID=${RIG_SESSION##*/}
   RIG_HOME="$RIG_SESSION/home"
   RIG_LOGS="$RIG_SESSION/logs"
   RIG_EVIDENCE="$RIG_SESSION/evidence"
@@ -76,10 +82,12 @@ rig_define_paths() {
 
   # Wayland and Hyprland sockets live in a sun_path-sized world — 108 bytes,
   # total. Hyprland's own instance directory eats 63 of them before the socket
-  # name, so the rig runtime dir gets a deliberately ugly short name next to
-  # the host's, not a descriptive one under TMPDIR. `opr` is this rig.
-  local tag=${RIG_SESSION##*.}
-  RIG_RUNTIME_DIR="$RIG_HOST_RUNTIME_DIR/opr.${tag: -6}"
+  # name, so the rig runtime dir gets a deliberately ugly short name directly
+  # under RIG_RUNTIME_ROOT, not a descriptive one under the long session dir.
+  # It is never inside the owner's /run/user/<uid>: that is the owner's session.
+  # `opr` is this rig.
+  RIG_RUNTIME_DIR="$RIG_RUNTIME_ROOT/opr.${RIG_SESSION##*.}"
+  RIG_LOCK_FILE="$RIG_TMP_ROOT/$RIG_ID.lock"
 }
 
 rig_guard_socket_path() {
@@ -98,8 +106,13 @@ rig_create_sandbox() {
   mkdir -p "$RIG_HOME" "$RIG_LOGS" "$RIG_EVIDENCE" "$RIG_STUB_BIN" \
     "$RIG_HOME/.config/omarchy" "$RIG_PLUGINS_DIR" \
     "$RIG_HOME/.local/share" "$RIG_HOME/.local/state" "$RIG_HOME/.cache"
-  mkdir -p "$RIG_RUNTIME_DIR"
-  chmod 700 "$RIG_RUNTIME_DIR" "$RIG_SESSION"
+  # No -p and no reuse: a runtime dir that already exists is somebody else's
+  # (or a leak), and sharing it would share their sockets.
+  [[ ! -e $RIG_RUNTIME_DIR ]] ||
+    rig_die "guard: $RIG_RUNTIME_DIR already exists; run 'dev/rig reap' or 'dev/rig verify-clean'"
+  install -d -m 700 "$RIG_RUNTIME_DIR" ||
+    rig_die "could not create the private runtime dir $RIG_RUNTIME_DIR"
+  chmod 700 "$RIG_SESSION"
 }
 
 # First-party shell services that have no business running in a test rig. The
@@ -164,6 +177,25 @@ rig_export_env() {
   export XDG_RUNTIME_DIR="$RIG_RUNTIME_DIR"
   export OMARCHY_PATH="$RIG_OMARCHY_PATH"
 
+  # The tag every process of this rig carries in its environment. Children
+  # inherit it, daemons included, so `ps`, `reap` and teardown can find the
+  # whole tree by what it is instead of by what it is called or who forked it.
+  export OPR_RIG_ID="$RIG_ID"
+
+  # No core dumps from anything the rig starts. A throwaway compositor that
+  # fails must leave a log line, not a core file and a crash notice on the
+  # owner's desktop. Limits are inherited, so this covers every child.
+  rig_no_cores
+
+  # No seat for the nested compositor, ever. Without this, Hyprland's DRM
+  # backend asks logind to hand it the owner's session ("Could not take control
+  # of session: Device or resource busy" in its log is that request being
+  # refused because the owner's Hyprland holds it). Pointing libseat at a
+  # socket that does not exist turns the attempt into a clean "no seat", and
+  # the compositor falls through to its Wayland parent.
+  export LIBSEAT_BACKEND=seatd
+  export SEATD_SOCK="$RIG_RUNTIME_DIR/.no-seat"
+
   # BASH_ENV is sourced by every non-interactive bash, and the file it names is
   # free to rewrite PATH. A CI runner or an agent harness that sets it would
   # silently put the host's tools back in front of the rig's recording stubs,
@@ -179,7 +211,7 @@ rig_export_env() {
   # install paperclipai.service while under test.
   unset DBUS_SESSION_BUS_ADDRESS
   unset DBUS_SYSTEM_BUS_ADDRESS
-  unset XDG_SESSION_ID XDG_SESSION_TYPE XDG_SESSION_DESKTOP
+  unset XDG_SESSION_ID XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_VTNR
   unset NOTIFY_SOCKET
 
   # The display, and only the rig's. Every tool that reaches a compositor —
@@ -216,14 +248,49 @@ rig_export_env() {
 # Blast radius first. Each of these answers "what can this run damage?" with
 # "nothing of the owner's", and exits if it cannot.
 
+# ----------------------------------------------------------------- cores ----
+#
+# `ulimit -c 0` is not enough on a host whose core_pattern pipes into
+# systemd-coredump: the kernel ignores a limit of 0 for pipes, still runs the
+# handler, and the abort lands in `coredumpctl` and the crash notice. A limit of
+# exactly 1 byte is the value the kernel refuses to pipe, so nothing is recorded
+# at all. bash cannot say "1 byte" (ulimit -c counts 1 KiB blocks); prlimit can.
+
+rig_core_limits() {
+  # Prints "<soft> <hard>" in bytes, or "unlimited unlimited".
+  prlimit --pid $$ --core --noheadings --raw --output SOFT,HARD 2>/dev/null
+}
+
+rig_no_cores() {
+  command -v prlimit >/dev/null 2>&1 ||
+    rig_die "prlimit (util-linux) is needed to switch core dumps off; refusing to start compositors"
+  prlimit --pid $$ --core=1:1 2>/dev/null && return 0
+  local soft hard
+  read -r soft hard < <(rig_core_limits)
+  if [[ $soft == 0 ]]; then
+    # The caller already ran `ulimit -c 0`, which lowered the hard limit and
+    # cannot be raised again. No core file is stored, but systemd-coredump
+    # still logs the event.
+    rig_warn "core limit is already 0 (hard); no core file will be stored, but an abort is still logged by systemd-coredump. Start the rig from a shell without 'ulimit -c 0' for a fully silent run."
+    return 0
+  fi
+  rig_die "cannot lower the core limit (soft=$soft hard=$hard); refusing to start compositors"
+}
+
+rig_hyprland_version() {
+  # Never `Hyprland --version`: it initialises the compositor and aborts when
+  # its environment is wrong.
+  pacman -Q hyprland 2>/dev/null || echo "hyprland (version unknown: pacman -Q failed)"
+}
+
 rig_guard_sandbox() {
   [[ -n ${RIG_HOME:-} ]] || rig_die "guard: no sandbox home"
   [[ $RIG_HOME != "$RIG_HOST_HOME" ]] ||
     rig_die "guard: sandbox HOME is the owner's home"
   [[ $RIG_HOME == "$RIG_TMP_ROOT"/* ]] ||
     rig_die "guard: sandbox HOME ($RIG_HOME) is outside $RIG_TMP_ROOT"
-  [[ $RIG_RUNTIME_DIR != "$RIG_HOST_RUNTIME_DIR" ]] ||
-    rig_die "guard: rig runtime dir is the host runtime dir"
+  [[ $RIG_RUNTIME_DIR != "$RIG_HOST_RUNTIME_DIR" && $RIG_RUNTIME_DIR != "$RIG_HOST_RUNTIME_DIR"/* ]] ||
+    rig_die "guard: rig runtime dir ($RIG_RUNTIME_DIR) is, or is inside, the owner's runtime dir"
   [[ $RIG_PLUGINS_DIR != "$RIG_HOST_CONFIG_HOME/omarchy/plugins" ]] ||
     rig_die "guard: rig would install into the owner's plugin directory"
   [[ $RIG_PAPERCLIP_DATA != "$RIG_HOST_PAPERCLIP_DIR" ]] ||
@@ -296,7 +363,7 @@ rig_free_port() {
   for attempt in $(seq 1 200); do
     port=$((low + RANDOM % (high - low)))
     local skip=0 forbidden
-    for forbidden in "${RIG_FORBIDDEN_PORTS[@]}"; do
+    for forbidden in "${RIG_FORBIDDEN_PORTS[@]}" ${RIG_PORTS_TAKEN:-}; do
       ((port == forbidden)) && skip=1
     done
     ((skip)) && continue
@@ -311,297 +378,49 @@ rig_free_port() {
 # ------------------------------------------------------------ state file ----
 
 rig_state_set() {
-  # rig_state_set KEY VALUE
+  # rig_state_set KEY VALUE — locked, because the keeper and the command that
+  # started it both write here.
   local key=$1 value=$2 tmp
-  tmp=$(mktemp "$RIG_SESSION/.state.XXXXXX")
-  if [[ -f $RIG_STATE_FILE ]]; then
-    grep -v "^$key=" "$RIG_STATE_FILE" >"$tmp" || true
-  fi
-  printf '%s=%s\n' "$key" "$value" >>"$tmp"
-  mv "$tmp" "$RIG_STATE_FILE"
+  (
+    flock 9
+    tmp=$(mktemp "$RIG_SESSION/.state.XXXXXX")
+    if [[ -f $RIG_STATE_FILE ]]; then
+      grep -v "^$key=" "$RIG_STATE_FILE" >"$tmp" || true
+    fi
+    printf '%s=%s\n' "$key" "$value" >>"$tmp"
+    mv "$tmp" "$RIG_STATE_FILE"
+  ) 9>"$RIG_SESSION/.state.lock"
 }
 
 rig_state_get() {
-  [[ -f $RIG_STATE_FILE ]] || return 1
+  rig_state_read "$RIG_STATE_FILE" "$1"
+}
+
+rig_state_read() {
+  # rig_state_read <state-file> <key> — another rig's value, for ps and reap.
+  [[ -f $1 ]] || return 1
   local line
-  line=$(grep "^$1=" "$RIG_STATE_FILE" | tail -n1) || return 1
+  line=$(grep "^$2=" "$1" | tail -n1) || return 1
   printf '%s\n' "${line#*=}"
 }
 
 rig_load_state() {
-  # Re-create the shell variables for an already-running session.
-  local session
-  session=$(rig_session_dir) || return 1
+  # Re-create the shell variables for an already-running rig.
+  # rig_load_state <session-dir>
+  local session=${1:-}
+  [[ -d $session ]] || return 1
   rig_define_paths "$session"
+  [[ -f $RIG_STATE_FILE ]] || return 1
   RIG_HTTP_PORT=$(rig_state_get http_port || echo "")
   RIG_PG_PORT=$(rig_state_get pg_port || echo "")
   RIG_INSTANCE_ID=$(rig_state_get instance_id || echo "$RIG_DEFAULT_INSTANCE_ID")
-  RIG_MODE=$(rig_state_get mode || echo headless)
+  RIG_VIEW=$(rig_state_get view || echo hidden)
   RIG_SHELL_PID=$(rig_state_get shell_pid || echo "")
   RIG_HYPR_PID=$(rig_state_get hypr_pid || echo "")
   RIG_PARENT_PID=$(rig_state_get parent_pid || echo "")
   RIG_INSTANCE_PID=$(rig_state_get instance_pid || echo "")
   RIG_NESTED_DISPLAY=$(rig_state_get nested_display || echo "")
   return 0
-}
-
-# ---------------------------------------------------- nested compositor ----
-
-rig_write_hypr_conf() {
-  # A config of our own. The owner's ~/.config/hypr is never read: Hyprland
-  # gets -c explicitly, and HOME points elsewhere anyway.
-  # Hyprland's parser does not accept a nested category on one line, and it
-  # paints a red error overlay across the top of every output when a key is
-  # wrong — which would land in every screenshot the rig takes. So: one key per
-  # line, nested categories spelled out, and nothing speculative.
-  cat >"$RIG_HYPR_CONF" <<CONF
-# Generated by dev/rig. Throwaway.
-monitor = , ${RIG_OUTPUT_WIDTH}x${RIG_OUTPUT_HEIGHT}@60, 0x0, 1
-
-general {
-  gaps_in = 0
-  gaps_out = 0
-  border_size = 1
-}
-
-decoration {
-  rounding = 0
-
-  blur {
-    enabled = false
-  }
-
-  shadow {
-    enabled = false
-  }
-}
-
-animations {
-  enabled = false
-}
-
-misc {
-  disable_hyprland_logo = true
-  disable_splash_rendering = true
-  force_default_wallpaper = 0
-  disable_autoreload = true
-}
-
-input {
-  follow_mouse = 1
-}
-
-# No autostart, no portals, no session wiring. The rig starts exactly what it
-# wants to test and nothing else.
-ecosystem {
-  no_update_news = true
-  no_donation_nag = true
-}
-CONF
-
-  # A config error would be a red banner over the bar in every screenshot, so
-  # catch it here where it can be read, not there where it hides the evidence.
-  local problems
-  problems=$(Hyprland --verify-config -c "$RIG_HYPR_CONF" 2>&1 |
-    grep -i "config error" || true)
-  [[ -z $problems ]] || rig_die "the rig Hyprland config is not clean:
-$problems"
-}
-
-# --------------------------------------------------- headless parent ----
-#
-# Hyprland cannot run on its own without an output. Its headless backend is a
-# fallback only: with neither a parent Wayland socket nor a DRM device,
-# aquamarine's CBackend::create() throws and Hyprland aborts. Verified on
-# Hyprland 0.56.2 / aquamarine 0.15.0.
-#
-# So "headless" here means "nest inside a headless parent compositor" rather
-# than "no compositor". The rig will not reach for DRM: on a developer box the
-# owner's session already holds DRM master, and a second DRM backend is exactly
-# the blast radius this rig exists to avoid.
-
-RIG_HEADLESS_PARENT_PACKAGES="weston (extra/weston) or cage (extra/cage)"
-
-rig_headless_parent_command() {
-  # Print the command that starts a headless Wayland parent, or nothing.
-  if command -v weston >/dev/null 2>&1; then
-    printf '%s\n' "weston --backend=headless --width=$RIG_OUTPUT_WIDTH --height=$RIG_OUTPUT_HEIGHT --socket=$RIG_PARENT_SOCKET"
-  elif command -v wlheadless-run >/dev/null 2>&1; then
-    printf '%s\n' "wlheadless-run -- sleep infinity"
-  elif command -v cage >/dev/null 2>&1; then
-    # cage is wlroots-based, so WLR_BACKENDS picks the backend for it.
-    printf '%s\n' "cage -- sleep infinity"
-  fi
-}
-
-rig_start_headless_parent() {
-  RIG_PARENT_SOCKET="wayland-rig"
-  local command log="$RIG_LOGS/parent-compositor.log"
-  command=$(rig_headless_parent_command)
-  [[ -n $command ]] || rig_die \
-    "headless mode needs a headless Wayland parent compositor, and none is installed.
-     Install one of: $RIG_HEADLESS_PARENT_PACKAGES — a host package install, so it needs
-     the owner's go-ahead, and on the self-hosted runner pool it belongs in the runner image.
-     Until then use 'dev/rig up --nested' inside a desktop session.
-     The rig will not fall back to the DRM backend: the owner's session holds DRM master."
-
-  rig_step "headless parent: $command"
-  # shellcheck disable=SC2086 # the command is built above, deliberately split
-  WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
-    WLR_HEADLESS_OUTPUTS=1 nohup $command >"$log" 2>&1 &
-  RIG_PARENT_PID=$!
-  rig_state_set parent_pid "$RIG_PARENT_PID"
-
-  local deadline=$((SECONDS + 30)) socket=""
-  while ((SECONDS < deadline)); do
-    kill -0 "$RIG_PARENT_PID" 2>/dev/null ||
-      rig_die "the headless parent compositor died; see $log"
-    for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
-      [[ -S $socket ]] && break 2
-    done
-    socket=""
-    sleep 0.5
-  done
-  [[ -n $socket ]] || rig_die "the headless parent never opened a socket; see $log"
-  rig_ok "headless parent up (pid $RIG_PARENT_PID, socket $socket)"
-  printf '%s\n' "$socket"
-}
-
-rig_start_compositor() {
-  rig_write_hypr_conf
-  rig_guard_socket_path
-  local log="$RIG_LOGS/compositor.log" parent=""
-
-  if [[ $RIG_MODE == nested ]]; then
-    [[ -n $RIG_HOST_WAYLAND_DISPLAY ]] ||
-      rig_die "nested mode needs a Wayland session; set WAYLAND_DISPLAY or use --headless"
-    parent=$RIG_HOST_WAYLAND_DISPLAY
-    [[ $parent == /* ]] || parent="$RIG_HOST_RUNTIME_DIR/$parent"
-    [[ -S $parent ]] || rig_die "no parent Wayland socket at $parent"
-    rig_step "nested mode: a window inside the owner's session (parent $parent)"
-  else
-    rig_step "headless mode: nested inside a headless parent compositor"
-    parent=$(rig_start_headless_parent) || exit 1
-  fi
-
-  # An absolute WAYLAND_DISPLAY is how the nested compositor reaches a parent
-  # socket that lives in a runtime dir it no longer has. Either way the shell
-  # under test sees only the socket the rig gives it.
-  WAYLAND_DISPLAY="$parent" nohup Hyprland -c "$RIG_HYPR_CONF" >"$log" 2>&1 &
-  RIG_HYPR_PID=$!
-  rig_state_set hypr_pid "$RIG_HYPR_PID"
-
-  local deadline=$((SECONDS + 40)) sig=""
-  while ((SECONDS < deadline)); do
-    kill -0 "$RIG_HYPR_PID" 2>/dev/null ||
-      rig_die "the nested compositor died; see $log"
-    sig=$(rig_hypr_signature) && [[ -n $sig ]] && break
-    sleep 0.5
-  done
-  [[ -n $sig ]] || rig_die "the nested compositor never opened its socket; see $log"
-
-  export HYPRLAND_INSTANCE_SIGNATURE="$sig"
-  rig_state_set hypr_signature "$sig"
-
-  # The nested compositor's own socket is a *second* wayland-N in this runtime
-  # dir when a headless parent put one there first, so pick by exclusion.
-  RIG_NESTED_DISPLAY=$(rig_nested_wayland_display "$parent") ||
-    rig_die "the nested compositor exposed no Wayland socket"
-  export WAYLAND_DISPLAY="$RIG_NESTED_DISPLAY"
-  rig_state_set nested_display "$RIG_NESTED_DISPLAY"
-
-  # A socket is not an output. The shell and grim both need one, and in nested
-  # mode it appears only once the parent has mapped the window.
-  deadline=$((SECONDS + 30))
-  until [[ $(hyprctl monitors -j 2>/dev/null | jq 'length' 2>/dev/null) -ge 1 ]] 2>/dev/null; do
-    kill -0 "$RIG_HYPR_PID" 2>/dev/null ||
-      rig_die "the nested compositor died; see $log"
-    ((SECONDS < deadline)) ||
-      rig_die "the nested compositor never got an output; see $log"
-    sleep 0.5
-  done
-  rig_ok "nested compositor up (pid $RIG_HYPR_PID, display $RIG_NESTED_DISPLAY)"
-}
-
-rig_hypr_signature() {
-  local dir
-  for dir in "$XDG_RUNTIME_DIR"/hypr/*/; do
-    [[ -S $dir/.socket.sock ]] || continue
-    dir=${dir%/}
-    printf '%s\n' "${dir##*/}"
-    return 0
-  done
-  return 1
-}
-
-rig_nested_wayland_display() {
-  # rig_nested_wayland_display [parent-socket-to-ignore]
-  local skip=${1:-} socket
-  for socket in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-    [[ -S $socket ]] || continue
-    [[ -n $skip && $socket == "$skip" ]] && continue
-    printf '%s\n' "${socket##*/}"
-    return 0
-  done
-  return 1
-}
-
-# ------------------------------------------------------------------ grim ----
-#
-# A nested compositor only gets frame callbacks while the host shows its
-# window. On a workspace nobody is looking at, grim waits for a frame forever.
-# So every grim call in the rig has a deadline and says why it ran out.
-
-RIG_GRIM_TIMEOUT=${RIG_GRIM_TIMEOUT:-15}
-
-rig_grim() {
-  # rig_grim <file.png> — one capture, bounded. Exit 124 means "no frame".
-  local out=$1 status=0
-  timeout --kill-after=3 "$RIG_GRIM_TIMEOUT" grim -t png "$out" || status=$?
-  if ((status == 124 || status == 137)); then
-    rig_fail "grim got no frame in ${RIG_GRIM_TIMEOUT}s: the rig window is not on a visible workspace of the host session. Switch the host to the workspace that holds the rig window and run it again."
-    return 124
-  fi
-  return "$status"
-}
-
-rig_grim_wait() {
-  # rig_grim_wait <file.png> — grim says "no wl_output" until the output is
-  # advertised, so retry fast failures for up to 20 seconds. A timeout is not
-  # retried: it will not get better by waiting.
-  local out=$1 deadline=$((SECONDS + 20)) status=0
-  while :; do
-    rig_grim "$out" && return 0
-    status=$?
-    ((status == 124)) && return 124
-    ((SECONDS < deadline)) || return "$status"
-    sleep 0.5
-  done
-}
-
-# --------------------------------------------------------- nested shell ----
-
-rig_start_shell() {
-  local log="$RIG_LOGS/shell.log"
-  rig_step "starting the Omarchy shell from $OMARCHY_PATH/shell"
-  printf -- '--- shell start %s ---\n' "$(date -u +%H:%M:%S)" >>"$log"
-  nohup quickshell -p "$OMARCHY_PATH/shell" >>"$log" 2>&1 &
-  RIG_SHELL_PID=$!
-  rig_state_set shell_pid "$RIG_SHELL_PID"
-
-  local deadline=$((SECONDS + 60))
-  while ((SECONDS < deadline)); do
-    kill -0 "$RIG_SHELL_PID" 2>/dev/null ||
-      rig_die "the nested shell died; see $log"
-    if [[ $(omarchy-shell shell ping 2>/dev/null) == *ok* ]] ||
-      omarchy-shell shell ping >/dev/null 2>&1; then
-      rig_guard_nested_shell
-      rig_ok "nested Omarchy shell answering IPC (pid $RIG_SHELL_PID)"
-      return 0
-    fi
-    sleep 1
-  done
-  rig_die "the nested shell never answered IPC; see $log"
 }
 
 # -------------------------------------------------------------- teardown ----
@@ -634,10 +453,21 @@ rig_wait_gone() {
 
 rig_teardown() {
   # Order matters: the instance first (it owns a database that wants a clean
-  # stop), then the shell, then the compositor, then the filesystem.
+  # stop), then the display (shell, compositor, headless parent), then
+  # whatever else carries the rig's tag, then the filesystem. One teardown of a
+  # rig at a time: the keeper, `down` and `reap` can all arrive together.
   local keep_evidence=${1:-}
 
   rig_say "Tearing down"
+  if ! rig_lock 120; then
+    rig_warn "another teardown of $RIG_ID holds the lock and did not finish"
+    return 1
+  fi
+  if [[ ! -d ${RIG_SESSION:-/nonexistent} ]]; then
+    rig_unlock
+    rig_ok "already gone"
+    return 0
+  fi
 
   if [[ -n ${RIG_INSTANCE_PID:-} ]]; then
     rig_step "stopping the throwaway Paperclip instance (pid $RIG_INSTANCE_PID)"
@@ -658,31 +488,10 @@ rig_teardown() {
     done
   fi
 
-  if [[ -n ${RIG_SHELL_PID:-} ]]; then
-    rig_step "stopping the nested shell (pid $RIG_SHELL_PID)"
-    rig_kill_tree "$RIG_SHELL_PID" TERM
-    rig_wait_gone "$RIG_SHELL_PID" 10 || rig_kill_tree "$RIG_SHELL_PID" KILL
-  fi
+  rig_stop_display
 
-  if [[ -n ${RIG_HYPR_PID:-} ]]; then
-    rig_step "stopping the nested compositor (pid $RIG_HYPR_PID)"
-    rig_kill_tree "$RIG_HYPR_PID" TERM
-    rig_wait_gone "$RIG_HYPR_PID" 10 || rig_kill_tree "$RIG_HYPR_PID" KILL
-  fi
-
-  if [[ -n ${RIG_PARENT_PID:-} ]]; then
-    rig_step "stopping the headless parent compositor (pid $RIG_PARENT_PID)"
-    rig_kill_tree "$RIG_PARENT_PID" TERM
-    rig_wait_gone "$RIG_PARENT_PID" 10 || rig_kill_tree "$RIG_PARENT_PID" KILL
-  fi
-
-  # Anything else still rooted in the session dir, whatever started it.
-  local stray
-  for stray in $(pgrep -f -- "$RIG_SESSION" 2>/dev/null); do
-    [[ $stray == "$$" ]] && continue
-    rig_step "killing stray process in the session tree (pid $stray)"
-    kill -KILL "$stray" 2>/dev/null || true
-  done
+  # Everything else with the rig's tag, whoever started it, wherever it went.
+  rig_sweep_tagged "$RIG_ID" || rig_warn "some processes of $RIG_ID will not die"
 
   if [[ -n $keep_evidence && -d ${RIG_EVIDENCE:-} ]]; then
     local out="$keep_evidence"
@@ -692,11 +501,11 @@ rig_teardown() {
     rig_ok "evidence kept in $out"
   fi
 
-  [[ -n ${RIG_RUNTIME_DIR:-} && $RIG_RUNTIME_DIR == "$RIG_HOST_RUNTIME_DIR"/opr.* ]] &&
+  [[ -n ${RIG_RUNTIME_DIR:-} && $RIG_RUNTIME_DIR == "$RIG_RUNTIME_ROOT"/opr.* ]] &&
     rm -rf "$RIG_RUNTIME_DIR"
   [[ -n ${RIG_SESSION:-} && $RIG_SESSION == "$RIG_TMP_ROOT"/* ]] &&
     rm -rf "$RIG_SESSION"
-  rm -f "$RIG_SESSION_LINK"
+  rig_unlock
 
   rig_ok "teardown done"
 }
@@ -722,15 +531,8 @@ rig_verify_clean() {
     rig_ok "runtime dir gone: ${RIG_RUNTIME_DIR:-<none>}"
   fi
 
-  if [[ -e $RIG_SESSION_LINK ]]; then
-    rig_fail "session pointer still present: $RIG_SESSION_LINK"
-    problems=$((problems + 1))
-  else
-    rig_ok "session pointer gone"
-  fi
-
   for port in ${RIG_HTTP_PORT:-} ${RIG_PG_PORT:-}; do
-    [[ -n $port ]] || continue
+    [[ -n $port && $port != 0 ]] || continue
     if ss -ltnH "sport = :$port" 2>/dev/null | grep -q .; then
       rig_fail "port $port still listening"
       problems=$((problems + 1))
@@ -749,7 +551,17 @@ rig_verify_clean() {
     fi
   done
 
-  if [[ -n ${RIG_SESSION:-} ]] && pgrep -f -- "$RIG_SESSION" >/dev/null 2>&1; then
+  local tagged
+  tagged=$(rig_tagged_pids "${RIG_ID:-none}")
+  if [[ -n $tagged ]]; then
+    rig_fail "processes of the rig are still running:"
+    for pid in $tagged; do ps -o pid=,comm=,args= -p "$pid" >&2; done
+    problems=$((problems + 1))
+  else
+    rig_ok "no process carries the rig tag ${RIG_ID:-<none>}"
+  fi
+
+  if [[ -n ${RIG_SESSION:-} ]] && pgrep -f -- "$RIG_SESSION" 2>/dev/null | grep -qvx "$$"; then
     rig_fail "processes still reference the session tree:"
     pgrep -af -- "$RIG_SESSION" >&2
     problems=$((problems + 1))
