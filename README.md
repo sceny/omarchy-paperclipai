@@ -33,8 +33,16 @@ dev/follow-develop uninstall   # timer and script gone
 
 Every 5 minutes (and 2 minutes after login) it fetches `origin/develop` for
 each plugin, fast-forwards the install, runs `omarchy-plugin-validate`, rolls
-back if that fails, and asks the shell to rescan once if anything changed. So a
-merge into `develop` is live within about five minutes. The record is one JSON
+back if that fails, and restarts the shell (`omarchy-restart-shell`) once if
+anything changed. A rescan is not enough: `rescanPlugins` finds added and
+removed plugins but does not reload the QML of one that is already loaded, so
+the files were new and the screen stayed old (SCE-441). When nothing changed it
+does not restart. When the session is locked the restart is refused; the pass
+logs `restart-deferred` and tries again on the next run. So a merge into
+`develop` is live within about five minutes, and running it needs no manual
+step. After a change to `dev/follow-develop` itself, run
+`dev/follow-develop install` again: the timer runs the copy in
+`~/.local/share/sceny-plugins/`. The record is one JSON
 line per plugin per pass in `~/.local/state/sceny-plugins/follow-develop.jsonl`,
 also in `journalctl --user -u sceny-plugins-follow-develop`.
 

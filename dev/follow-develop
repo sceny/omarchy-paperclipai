@@ -2,7 +2,7 @@
 # Keep the owner's installed Sceny plugins on their repo's `develop` branch,
 # with no agent run. One pass: for each plugin, fetch origin/develop,
 # fast-forward the installed git checkout, validate it, roll back if the
-# validation fails, and rescan the shell once if anything changed.
+# validation fails, and restart the shell once if anything changed.
 #
 # Why not `omarchy plugin update`: it fetches the remote's default branch
 # (`main`), and `main` is the release branch. It never brings `develop`.
@@ -12,6 +12,14 @@
 #                             and enable the user timer (every 5 minutes)
 #   follow-develop uninstall  disable the timer and remove what install made
 #   follow-develop status     timer state and the last log lines
+#
+# Why a restart and not `omarchy-shell shell rescanPlugins`: a rescan finds
+# plugins that were added or removed. It does not reload the code of a plugin
+# that is already loaded, so the files were new and the screen stayed old
+# (SCE-441). The shell has no per-plugin reload over IPC, so the pass runs
+# `omarchy-restart-shell`, and only when a plugin really changed. That script
+# refuses while the session is locked; the pass keeps a marker and tries again
+# on the next run, so a lock delays the restart and never loses it.
 #
 # Reusable: it takes plugin ids, not repos. Another Sceny plugin needs only its
 # id added to FOLLOW_PLUGINS below (or in the environment).
@@ -35,7 +43,9 @@ UNIT_DIR=${FOLLOW_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 UNIT=sceny-plugins-follow-develop
 # Overridable so tests never reach a real shell.
 VALIDATE_CMD=${FOLLOW_VALIDATE_CMD:-omarchy-plugin-validate}
-RESCAN_CMD=${FOLLOW_RESCAN_CMD:-omarchy-shell shell rescanPlugins}
+PING_CMD=${FOLLOW_PING_CMD:-omarchy-shell shell ping}
+RESTART_CMD=${FOLLOW_RESTART_CMD:-omarchy-restart-shell}
+PENDING=$STATE_DIR/restart-pending
 
 export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
@@ -90,6 +100,48 @@ follow_one() {
   UPDATED=1
 }
 
+restart_shell_if_pending() {
+  # The marker is set by a pass that changed a plugin and removed only once the
+  # running shell has been restarted (or there is no shell to restart). Its
+  # content is "deferred" after a restart that failed: the shell may be down
+  # then, and omarchy-restart-shell is also how it comes back.
+  [[ -e $PENDING ]] || return 0
+  if [[ $(<"$PENDING") != deferred ]] && ! shell_up; then
+    rm -f "$PENDING"
+    log - restart-skipped "shell not running; it loads the plugins when it starts"
+    return 0
+  fi
+  local out
+  # 9>&-: a shell that inherited the lock fd would hold the lock for good.
+  if out=$($RESTART_CMD 9>&- 2>&1); then
+    rm -f "$PENDING"
+    log - restarted "shell restarted; the new plugin code is live"
+  elif [[ $out == *"did not become ready"* ]] && wait_for_shell; then
+    # omarchy-restart-shell waits 2 seconds; a shell with many plugins can need more.
+    rm -f "$PENDING"
+    log - restarted "shell restarted; it was ready after the restart script gave up"
+  else
+    # A locked session is the expected reason. Keep the marker, retry next pass.
+    echo deferred >"$PENDING"
+    log - restart-deferred "${out//$'\n'/ }; retrying on the next pass"
+  fi
+}
+
+shell_up() {
+  $PING_CMD >/dev/null 2>&1 && return 0
+  sleep "${FOLLOW_PING_RETRY_SEC:-3}"
+  $PING_CMD >/dev/null 2>&1
+}
+
+wait_for_shell() {
+  local i
+  for ((i = 0; i < ${FOLLOW_READY_WAIT_SEC:-30}; i++)); do
+    $PING_CMD >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
 run() {
   local rc=0 id
   UPDATED=0
@@ -99,14 +151,8 @@ run() {
   for id in $FOLLOW_PLUGINS; do
     follow_one "$id" || rc=1
   done
-  if ((UPDATED)); then
-    # The shell may not be running (logged out); it reads plugins at start.
-    if $RESCAN_CMD >/dev/null 2>&1; then
-      log - rescanned
-    else
-      log - rescan-skipped "shell not reachable; it reads plugins when it starts"
-    fi
-  fi
+  ((UPDATED)) && { [[ -e $PENDING ]] || echo updated >"$PENDING"; }
+  restart_shell_if_pending
   return $rc
 }
 
@@ -114,7 +160,8 @@ install_units() {
   local src
   src=$(readlink -f "${BASH_SOURCE[0]}")
   mkdir -p "$INSTALL_DIR" "$UNIT_DIR"
-  install -m 0755 "$src" "$INSTALL_DIR/follow-develop"
+  install -m 0755 "$src" "$INSTALL_DIR/.follow-develop.new"
+  mv -f "$INSTALL_DIR/.follow-develop.new" "$INSTALL_DIR/follow-develop"
   cat >"$UNIT_DIR/$UNIT.service" <<EOF
 [Unit]
 Description=Fast-forward the installed Sceny plugins to their develop branch
@@ -150,6 +197,7 @@ EOF
 uninstall_units() {
   systemctl --user disable --now "$UNIT.timer" 2>/dev/null || true
   rm -f "$UNIT_DIR/$UNIT.timer" "$UNIT_DIR/$UNIT.service" "$INSTALL_DIR/follow-develop"
+  rm -f "$PENDING"
   rmdir "$INSTALL_DIR" 2>/dev/null || true
   systemctl --user daemon-reload
 }
