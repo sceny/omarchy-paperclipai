@@ -2,31 +2,49 @@
 # Isolated test rig for Sceny's Omarchy shell plugins.
 #
 # Usage:
-#   dev/rig up [--nested|--headless]     bring the rig up and leave it running
+#   dev/rig up [--visible] [--ttl SECONDS] [--owner PID|none]
+#                                        bring the rig up, hidden, and leave it running
 #   dev/rig down                         tear it down and prove nothing is left
-#   dev/rig ci [--nested|--headless]     up, run every check, tear down (one command)
+#   dev/rig ci [--evidence DIR]          up, run every check, tear down (one command)
 #   dev/rig check                        run the checks against a running rig
 #   dev/rig status                       what is running, and where
-#   dev/rig screenshot [file.png]        capture the nested shell
+#   dev/rig screenshot [file.png]        capture the nested shell (works hidden)
 #   dev/rig seed                         one inbox row of each kind in the throwaway instance
 #   dev/rig restart-shell                restart only the nested shell (after a .js change)
-#   dev/rig logs [shell|compositor|instance|stubs]
+#   dev/rig show | hide                  put the rig on the owner's screen / take it off again
+#   dev/rig ps [--json]                  every live rig: owner, age, time left
+#   dev/rig reap [--dry-run]             end every rig whose owner is gone or whose TTL is up
+#   dev/rig adopt [--owner PID|none] [--ttl SECONDS]
+#                                        give a running rig a new owner and a fresh TTL
+#   dev/rig logs [shell|compositor|instance|keeper|stubs]
 #   dev/rig exec -- <command...>         run a command inside the rig sandbox
-#   dev/rig verify-clean                 teardown proof for the last session
+#   dev/rig verify-clean                 prove no rig has left anything behind
+#   dev/rig probe -- <command...>        one-off probe in a private runtime dir, cores off
+#   dev/rig selftest                     test the lease, keeper, ps and reap (no compositor needed)
+#   dev/rig --rig <id> <command>         act on one named rig (a part of the id is enough)
 #
 # What it guarantees, and why it exists:
 #
-#   * The Omarchy shell under test runs in its OWN nested compositor. The
-#     owner's Hyprland session, bar and shell are never restarted, reloaded or
-#     reconfigured.
-#   * The shell under test has its own HOME, its own XDG directories and its
-#     own XDG_RUNTIME_DIR. It installs the plugin into a throwaway
-#     ~/.config/omarchy/plugins, never the owner's.
-#   * Paperclip under test is a throwaway instance on its own port with its own
-#     data directory. The owner's instance is never started, stopped, migrated
-#     or written to.
+#   * HIDDEN BY DEFAULT. The Omarchy shell under test runs in its own Hyprland,
+#     inside a headless Wayland parent (labwc). Nothing is mapped on any monitor
+#     of the owner's session: no window on their workspaces, no moved or
+#     retiled windows, no stolen focus. Screenshots and shell IPC work while
+#     hidden. A window appears only on `dev/rig show` (or `up --visible`), and
+#     only the owner asks for that: an agent or CI run is refused.
+#   * NO ZOMBIES. A rig has one owner process and a TTL. When the owner ends,
+#     crashes or is killed, or the TTL is up, the compositor, shell, Paperclip
+#     instance, Postgres and temp dirs go. `dev/rig ps` lists every rig,
+#     `dev/rig reap` ends the dead ones, and `down` proves nothing is left.
+#   * The owner's Hyprland session, bar, shell, config and Paperclip instance
+#     are never restarted, reloaded, reconfigured or written to.
+#   * The shell under test has its own HOME, XDG directories and runtime dir,
+#     and installs the plugin into a throwaway ~/.config/omarchy/plugins.
+#   * Paperclip under test is a throwaway instance on its own ports with its own
+#     data directory.
 #   * The sandbox has no session bus, so the plugin cannot reach the owner's
 #     systemd user units.
+#   * Two rigs at the same time share nothing: their own runtime dirs, ports,
+#     sockets and process tags.
 #
 # See README.md ("Testing the plugin") for the walkthrough, and dev/rig.conf
 # for the per-plugin settings a second plugin repo changes.
@@ -47,6 +65,12 @@ RIG_DEFAULT_INSTANCE_ID=rig
 
 # shellcheck source=rig.d/lib.sh
 source "$RIG_DIR/rig.d/lib.sh"
+# shellcheck source=rig.d/lease.sh
+source "$RIG_DIR/rig.d/lease.sh"
+# shellcheck source=rig.d/display.sh
+source "$RIG_DIR/rig.d/display.sh"
+# shellcheck source=rig.d/selftest.sh
+source "$RIG_DIR/rig.d/selftest.sh"
 # shellcheck source=rig.d/checks.sh
 source "$RIG_DIR/rig.d/checks.sh"
 if ((RIG_NEEDS_PAPERCLIP)); then
@@ -57,14 +81,14 @@ fi
 # ------------------------------------------------------------------ usage ----
 
 rig_usage() {
-  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  awk 'NR > 1 { if (/^#/) print; else exit }' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ------------------------------------------------------- dependency check ----
 
 rig_require_tools() {
   local missing=() tool
-  for tool in Hyprland quickshell qs omarchy hyprctl grim jq curl git python3 ss; do
+  for tool in Hyprland quickshell qs omarchy hyprctl grim jq curl git python3 ss flock setsid prlimit; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
   if ((${#missing[@]})); then
@@ -75,21 +99,6 @@ rig_require_tools() {
     rig_die "no Paperclip CLI found; install it or set RIG_PAPERCLIP_CLI=<path>"
 }
 
-# --------------------------------------------------------------- mode pick ----
-
-rig_pick_mode() {
-  # Nested when there is a session to nest inside, headless otherwise. CI gets
-  # headless without having to know it is CI.
-  local requested=${1:-auto}
-  case $requested in
-  nested | headless) RIG_MODE=$requested ;;
-  auto)
-    if [[ -n $RIG_HOST_WAYLAND_DISPLAY ]]; then RIG_MODE=nested; else RIG_MODE=headless; fi
-    ;;
-  *) rig_die "unknown mode: $requested" ;;
-  esac
-}
-
 # ---------------------------------------------------------------------- up ----
 
 RIG_UP_SUCCEEDED=0
@@ -97,61 +106,97 @@ RIG_UP_SUCCEEDED=0
 rig_up_cleanup_on_failure() {
   ((RIG_UP_SUCCEEDED)) && return 0
   rig_warn "bringing the rig up failed — tearing down what started"
-  rig_teardown
+  # Logs are the only way to see why. One fixed directory, overwritten by the
+  # next failure, so a failed run leaves no pile behind.
+  local keep="$RIG_TMP_ROOT/last-failed-up"
+  rm -rf "$keep"
+  rig_teardown "$keep"
 }
 
 cmd_up() {
-  local mode=auto
+  local view=hidden ttl=${RIG_TTL:-$RIG_DEFAULT_TTL}
   while (($#)); do
     case $1 in
-    --nested) mode=nested ;;
-    --headless) mode=headless ;;
+    --visible) view=visible ;;
+    --hidden) view=hidden ;;
+    --ttl)
+      ttl=${2:?--ttl needs seconds}
+      shift
+      ;;
+    --owner)
+      RIG_OWNER_PID=${2:?--owner needs a pid or none}
+      shift
+      ;;
     *) rig_die "up: unknown option $1" ;;
     esac
     shift
   done
-
-  if rig_session_dir >/dev/null 2>&1; then
-    rig_die "a rig session is already up at $(rig_session_dir); run 'dev/rig down' first"
-  fi
+  [[ $ttl =~ ^[0-9]+$ ]] || rig_die "up: --ttl needs a whole number of seconds"
+  [[ $view == visible ]] && rig_refuse_unrequested_visible
 
   rig_require_tools
-  rig_pick_mode "$mode"
+  [[ $view == visible ]] || rig_require_headless_parent
+  rig_ensure_root
+  reap_dead_rigs_quietly
+
+  local owner existing
+  owner=$(rig_resolve_owner)
+  existing=$( (
+    unset OPR_RIG_ID RIG_SELECT
+    rig_select >/dev/null 2>&1 && echo "$RIG_ID"
+  ))
+  [[ -z $existing ]] ||
+    rig_die "this owner already has a rig ($existing); run 'dev/rig down', or give the second one its own --owner"
 
   local session
   session=$(rig_new_session_dir)
   rig_define_paths "$session"
-
+  RIG_VIEW=$view
+  RIG_TTL=$ttl
+  RIG_HYPR_PID="" RIG_PARENT_PID="" RIG_SHELL_PID="" RIG_INSTANCE_PID="" RIG_NESTED_DISPLAY=""
   RIG_INSTANCE_ID=$RIG_DEFAULT_INSTANCE_ID
-  if ((RIG_NEEDS_PAPERCLIP)); then
-    RIG_HTTP_PORT=$(rig_free_port 3400 3499) || rig_die "no free HTTP port"
-    RIG_PG_PORT=$(rig_free_port 54400 54499) || rig_die "no free Postgres port"
-  else
-    RIG_HTTP_PORT=0
-    RIG_PG_PORT=0
-  fi
-
+  RIG_HTTP_PORT=0
+  RIG_PG_PORT=0
   rig_guard_sandbox
-  ((RIG_NEEDS_PAPERCLIP)) && rig_guard_ports
 
-  rig_say "Bringing up the rig for $RIG_PLUGIN_ID ($RIG_MODE)"
+  rig_say "Bringing up the rig for $RIG_PLUGIN_ID ($RIG_VIEW)"
   rig_create_sandbox
   trap rig_up_cleanup_on_failure EXIT
   trap 'rig_teardown; exit 130' INT TERM
 
-  ln -sfn "$RIG_SESSION" "$RIG_SESSION_LINK"
   rig_state_set plugin_id "$RIG_PLUGIN_ID"
-  rig_state_set mode "$RIG_MODE"
+  rig_state_set view "$RIG_VIEW"
   rig_state_set instance_id "$RIG_INSTANCE_ID"
-  rig_state_set http_port "$RIG_HTTP_PORT"
-  rig_state_set pg_port "$RIG_PG_PORT"
   rig_state_set source "$RIG_PLUGIN_SRC_ABS"
+  rig_lease_init "$owner" "$ttl"
+  if [[ $owner == none ]]; then
+    RIG_OWNER_DESC="none (only the TTL ends it)"
+  else
+    RIG_OWNER_DESC="$(rig_proc_comm "$owner") pid $owner"
+  fi
+
+  if ((RIG_NEEDS_PAPERCLIP)); then
+    rig_reserve_ports || rig_die "no free ports for the throwaway instance"
+    rig_guard_ports
+  else
+    rig_state_set http_port 0
+    rig_state_set pg_port 0
+  fi
+
+  # What the owner's desktop looks like before the rig exists, for `down` to
+  # compare against. Read-only queries; there may be no desktop (CI, SSH).
+  rig_host_snapshot "$RIG_EVIDENCE/host-before.json" ||
+    rig_warn "no desktop session to snapshot; the before/after comparison will be skipped"
 
   rig_seed_omarchy_config
   rig_write_stubs
   rig_export_env
   rig_guard_no_host_systemd
   rig_ok "sandbox at $RIG_SESSION (HOME=$RIG_HOME)"
+
+  # The keeper starts before anything else does, so a run killed halfway
+  # through `up` still leaves nothing behind.
+  rig_keeper_start
 
   if ((RIG_NEEDS_PAPERCLIP)); then
     rig_pc_write_config
@@ -172,7 +217,7 @@ cmd_up() {
 
   Next:
     dev/rig check                  run the checks
-    dev/rig screenshot shot.png    capture the nested shell
+    dev/rig screenshot shot.png    capture the shell (works while hidden)
     dev/rig exec -- omarchy plugin list
     dev/rig down                   tear it down
 
@@ -180,6 +225,34 @@ INFO
 }
 
 # -------------------------------------------------------------------- down ----
+
+rig_report_host() {
+  # rig_report_host <before.json> <keep-dir|""> — compare the owner's desktop
+  # now with how it was before `up`.
+  local before=$1 keep=$2 after diff_out status=0
+  after=$(mktemp "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-host-after.XXXXXX")
+  rig_say "The owner's desktop"
+  if ! rig_host_snapshot "$after"; then
+    rig_warn "no desktop session to compare; skipped"
+  else
+    diff_out=$(rig_host_compare "$before" "$after") || status=$?
+    case $status in
+    0) rig_ok "windows, workspaces and focus are exactly as before the rig came up" ;;
+    2) rig_warn "no 'before' snapshot to compare against" ;;
+    *)
+      rig_warn "the desktop differs from before the rig (the owner may have been using it):"
+      printf '%s\n' "$diff_out" >&2
+      ;;
+    esac
+    if [[ -n $keep ]]; then
+      mkdir -p "$keep"
+      cp "$before" "$keep/host-before.json"
+      cp "$after" "$keep/host-after.json"
+      [[ -z ${diff_out:-} ]] || printf '%s\n' "$diff_out" >"$keep/host-diff.txt"
+    fi
+  fi
+  rm -f "$after"
+}
 
 cmd_down() {
   local keep=""
@@ -194,57 +267,71 @@ cmd_down() {
     shift
   done
 
-  rig_load_state || {
-    rig_warn "no rig session is up"
-    cmd_verify_clean_nothing
+  rig_select || {
+    rig_warn "no rig for this owner (dev/rig ps lists every rig)"
     return 0
   }
-  rig_export_env
-  rig_teardown "$keep"
-  rig_verify_clean
-}
-
-cmd_verify_clean_nothing() {
-  # Nothing was up, so the only thing to prove is that nothing is lying around.
-  local stale=0
-  if compgen -G "$RIG_TMP_ROOT/$RIG_PLUGIN_ID."'*' >/dev/null 2>&1; then
-    rig_fail "stale session directories under $RIG_TMP_ROOT:"
-    ls -d "$RIG_TMP_ROOT/$RIG_PLUGIN_ID."* >&2
-    stale=1
-  fi
-  if compgen -G "$RIG_HOST_RUNTIME_DIR/opr."'*' >/dev/null 2>&1; then
-    rig_fail "stale runtime directories:"
-    ls -d "$RIG_HOST_RUNTIME_DIR/opr."* >&2
-    stale=1
-  fi
-  ((stale)) && return 1
-  rig_ok "no rig state anywhere"
-  return 0
+  local before status=0
+  before=$(mktemp "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-host-before.XXXXXX")
+  cp "$RIG_EVIDENCE/host-before.json" "$before" 2>/dev/null ||
+    printf '{"available":false}\n' >"$before"
+  rig_teardown "$keep" || status=1
+  rig_verify_clean || status=1
+  rig_report_host "$before" "$keep"
+  rm -f "$before"
+  return $status
 }
 
 cmd_verify_clean() {
-  if rig_load_state; then
-    rig_warn "a session is still up at $RIG_SESSION — run 'dev/rig down'"
-    return 1
-  fi
-  cmd_verify_clean_nothing
+  # Not "is this rig gone" (down proves that) but "has any rig left anything":
+  # processes that carry a tag whose rig is gone, runtime dirs with no rig,
+  # rigs whose owner has gone and that nobody has reaped yet.
+  local stale=0 tag pid rt suffix dir state live=0
+  rig_say "Looking for leftovers of any rig"
+  while read -r tag pid; do
+    [[ -n $tag && ! -d $RIG_TMP_ROOT/$tag ]] || continue
+    rig_fail "process $pid ($(rig_proc_comm "$pid")) belongs to $tag, whose rig is gone"
+    stale=1
+  done < <(rig_tag_scan)
+  for rt in "$RIG_RUNTIME_ROOT"/opr.*; do
+    [[ -d $rt ]] || continue
+    suffix=${rt##*opr.}
+    compgen -G "$RIG_TMP_ROOT/*.$suffix" >/dev/null && continue
+    rig_fail "runtime dir with no rig: $rt"
+    stale=1
+  done
+  for dir in $(rig_session_dirs); do
+    state=$(rig_lease_state "$dir")
+    case $state in
+    orphaned | expired)
+      rig_fail "${dir##*/} is $state and not reaped yet; run 'dev/rig reap'"
+      stale=1
+      ;;
+    *) live=$((live + 1)) ;;
+    esac
+  done
+  ((stale)) && return 1
+  rig_ok "no leaked processes or directories ($live live rig(s), all with a live lease)"
 }
 
 # ------------------------------------------------------------------ status ----
 
 cmd_status() {
-  rig_load_state || {
-    rig_warn "no rig session is up"
+  rig_select || {
+    rig_warn "no rig for this owner (dev/rig ps lists every rig)"
     return 1
   }
-  rig_export_env
   {
-    printf '  plugin      %s\n' "$RIG_PLUGIN_ID"
+    printf '  rig         %s\n' "$RIG_ID"
+    printf '  plugin      %s\n' "$(rig_state_get plugin_id || echo "$RIG_PLUGIN_ID")"
     printf '  source      %s\n' "$(rig_state_get source || echo '?')"
-    printf '  mode        %s\n' "$RIG_MODE"
+    printf '  view        %s\n' "$RIG_VIEW"
+    printf '  owner       %s pid %s\n' "$(rig_state_get owner_name || echo '-')" "$(rig_state_get owner_pid || echo none)"
+    printf '  lease       %s, ttl %s\n' "$(rig_lease_state "$RIG_SESSION")" "$(rig_fmt_duration "$(rig_state_get ttl || echo 0)")"
     printf '  session     %s\n' "$RIG_SESSION"
     printf '  sandbox     HOME=%s\n' "$RIG_HOME"
     printf '  runtime     %s\n' "$RIG_RUNTIME_DIR"
+    printf '  hyprland    %s (pacman -Q; never Hyprland --version)\n' "$(rig_hyprland_version)"
     printf '  compositor  pid %s  display %s\n' "${RIG_HYPR_PID:-?}" "${RIG_NESTED_DISPLAY:-?}"
     [[ -n ${RIG_PARENT_PID:-} ]] &&
       printf '  parent      pid %s (headless parent compositor)\n' "$RIG_PARENT_PID"
@@ -265,19 +352,23 @@ cmd_status() {
 # ------------------------------------------------------------------ checks ----
 
 cmd_check() {
-  rig_load_state || rig_die "no rig session is up; run 'dev/rig up' first"
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first (dev/rig ps lists every rig)"
   rig_export_env
   rig_guard_sandbox
   rig_guard_nested_display
   rig_guard_nested_shell
   rig_guard_no_host_systemd
   rig_guard_stubs
+  rig_guard_hidden
 
   rig_check_host_untouched
+  rig_check_lease
+  rig_check_shell_services_off
   rig_check_manifest
   rig_check_cold_install
   rig_check_enable
   rig_check_screenshot
+  rig_check_hidden
   if ((RIG_NEEDS_PAPERCLIP)); then
     rig_check_plugin_scripts_up
     rig_check_plugin_scripts_down
@@ -285,7 +376,9 @@ cmd_check() {
   rig_check_repeat_install
   rig_check_disable
   rig_check_remove
+  rig_check_shell_services_off
   rig_check_host_untouched
+  rig_check_hidden
 
   rig_write_summary_file
   rig_check_summary
@@ -294,11 +387,14 @@ cmd_check() {
 # ---------------------------------------------------------------------- ci ----
 
 cmd_ci() {
-  local mode=--headless out="$RIG_DIR/../.rig-evidence"
+  local out="$RIG_DIR/../.rig-evidence" up_args=()
   while (($#)); do
     case $1 in
-    --nested) mode=--nested ;;
-    --headless) mode=--headless ;;
+    --visible) up_args+=(--visible) ;;
+    --ttl)
+      up_args+=(--ttl "${2:?--ttl needs seconds}")
+      shift
+      ;;
     --evidence)
       out=${2:?--evidence needs a directory}
       shift
@@ -308,7 +404,11 @@ cmd_ci() {
     shift
   done
 
-  cmd_up "$mode" || return 1
+  # `ci` owns its rig. If it is killed, the keeper ends the rig within seconds.
+  [[ -n ${RIG_OWNER_PID:-} ]] || RIG_OWNER_PID=$$
+  [[ " ${up_args[*]} " == *" --ttl "* ]] || up_args+=(--ttl "$RIG_CI_TTL")
+
+  cmd_up "${up_args[@]}" || return 1
   local status=0
   # A subshell: rig_die exits, and an exit here would skip the teardown.
   (cmd_check) || status=$?
@@ -321,17 +421,88 @@ cmd_ci() {
   return $status
 }
 
+# ------------------------------------------------------------------- probe ----
+
+cmd_probe() {
+  # An ad-hoc probe needs no rig, but it needs the same manners: a private
+  # runtime dir and HOME that vanish afterwards, no host display or bus, no cores.
+  [[ ${1:-} == -- ]] && shift
+  (($#)) || rig_die "probe: nothing to run"
+  if [[ ${1##*/} == Hyprland ]]; then
+    local arg safe=0
+    for arg in "$@"; do
+      [[ $arg == --verify-config || $arg == --help || $arg == -h ]] && safe=1
+    done
+    ((safe)) || rig_die "probe: only 'Hyprland --verify-config' and '--help' are allowed here. A compositor needs a parent and would otherwise reach for the owner's GPU and input devices: use 'dev/rig up'. The version is 'pacman -Q hyprland'."
+  fi
+  rig_no_cores
+
+  local root status=0
+  root=$(mktemp -d "$RIG_RUNTIME_ROOT/opr-p.XXXXXX") || rig_die "probe: cannot create a private runtime dir"
+  mkdir -m 700 "$root/home"
+  # shellcheck disable=SC2064 # $root is fixed for this probe
+  trap "rm -rf '$root'; exit 130" INT TERM
+  (
+    export HOME="$root/home" XDG_RUNTIME_DIR="$root"
+    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+    export XDG_STATE_HOME="$HOME/.local/state" XDG_CACHE_HOME="$HOME/.cache"
+    unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE DBUS_SESSION_BUS_ADDRESS \
+      DBUS_SYSTEM_BUS_ADDRESS NOTIFY_SOCKET BASH_ENV ENV
+    [[ ${1##*/} == Hyprland ]] && rig_guard_compositor_env
+    "$@"
+  ) || status=$?
+
+  local stray
+  for stray in $(pgrep -f -- "$root" 2>/dev/null); do
+    [[ $stray == "$$" ]] && continue
+    kill -KILL "$stray" 2>/dev/null || true
+  done
+  rm -rf "$root"
+  trap - INT TERM
+  [[ ! -e $root ]] || rig_die "probe: $root survived cleanup"
+  return "$status"
+}
+
 # ------------------------------------------------------------- screenshot ----
 
 cmd_screenshot() {
-  rig_load_state || rig_die "no rig session is up"
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
   rig_export_env
   rig_guard_nested_display
   local out=${1:-$RIG_EVIDENCE/nested-shell.png}
   rig_grim_wait "$out" || rig_die "grim failed"
   [[ -s $out ]] || rig_die "grim wrote an empty file"
-  rig_ok "wrote $out ($(stat -c %s "$out") bytes)"
+  rig_ok "wrote $out ($(stat -c %s "$out") bytes, $RIG_VIEW view)"
   printf '%s\n' "$out"
+}
+
+# --------------------------------------------------------------- show/hide ----
+
+cmd_view() {
+  # cmd_view <hidden|visible> — move the rig's compositor and shell to another
+  # parent. HOME, the installed plugin and the Paperclip instance are not
+  # touched, so the rig comes back as it was, in a different place.
+  local target=$1
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
+  [[ $target == visible ]] && rig_refuse_unrequested_visible
+  if [[ $RIG_VIEW == "$target" ]]; then
+    rig_ok "the rig is already $target"
+    return 0
+  fi
+  rig_export_env
+  rig_guard_sandbox
+
+  rig_say "Moving the rig from $RIG_VIEW to $target"
+  rig_stop_display
+  RIG_VIEW=$target
+  rig_state_set view "$target"
+  rig_start_compositor
+  rig_start_shell
+  if [[ $target == visible ]]; then
+    rig_ok "the rig is a window of the owner's session now; 'dev/rig hide' takes it away"
+  else
+    rig_ok "the rig is hidden again"
+  fi
 }
 
 # ----------------------------------------------------------- restart-shell ----
@@ -341,7 +512,7 @@ cmd_restart_shell() {
   # already imported, so after a .js edit the shell must be started again. The
   # compositor, the Paperclip instance and shell.json stay as they are, so the
   # installed plugin and its bar placement survive.
-  rig_load_state || rig_die "no rig session is up"
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
   rig_export_env
   rig_guard_sandbox
   rig_guard_nested_display
@@ -362,20 +533,48 @@ cmd_restart_shell() {
 
 cmd_seed() {
   ((RIG_NEEDS_PAPERCLIP)) || rig_die "seed: $RIG_PLUGIN_ID does not use a Paperclip instance (RIG_NEEDS_PAPERCLIP=0)"
-  rig_load_state || rig_die "no rig session is up; run 'dev/rig up' first"
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
   rig_export_env
   rig_guard_sandbox
   rig_pc_seed
 }
 
+# ------------------------------------------------------------------- adopt ----
+
+cmd_adopt() {
+  rig_select || rig_die "no rig to adopt; name one with --rig <id> (dev/rig ps)"
+  local ttl
+  ttl=$(rig_state_get ttl || echo "$RIG_DEFAULT_TTL")
+  while (($#)); do
+    case $1 in
+    --owner)
+      RIG_OWNER_PID=${2:?--owner needs a pid or none}
+      shift
+      ;;
+    --ttl)
+      ttl=${2:?--ttl needs seconds}
+      shift
+      ;;
+    *) rig_die "adopt: unknown option $1" ;;
+    esac
+    shift
+  done
+  [[ $ttl =~ ^[0-9]+$ ]] || rig_die "adopt: --ttl needs a whole number of seconds"
+  local owner
+  owner=$(rig_resolve_owner)
+  rig_lease_init "$owner" "$ttl"
+  rig_ok "$RIG_ID is now owned by ${owner}, ttl $(rig_fmt_duration "$ttl") from now"
+}
+
 # -------------------------------------------------------------------- logs ----
 
 cmd_logs() {
-  rig_load_state || rig_die "no rig session is up"
+  rig_select || rig_die "no rig for this owner"
   case ${1:-shell} in
   shell) tail -n "${2:-80}" "$RIG_LOGS/shell.log" ;;
   compositor) tail -n "${2:-80}" "$RIG_LOGS/compositor.log" ;;
   instance) tail -n "${2:-80}" "$RIG_LOGS/instance.log" ;;
+  keeper) tail -n "${2:-80}" "$RIG_LOGS/keeper.log" ;;
   stubs) cat "$RIG_LOGS/stub-calls.log" ;;
   *) rig_die "logs: unknown target $1" ;;
   esac
@@ -384,7 +583,7 @@ cmd_logs() {
 # -------------------------------------------------------------------- exec ----
 
 cmd_exec() {
-  rig_load_state || rig_die "no rig session is up"
+  rig_select || rig_die "no rig for this owner"
   rig_export_env
   rig_guard_sandbox
   rig_guard_nested_display
@@ -396,7 +595,22 @@ cmd_exec() {
 
 # ------------------------------------------------------------------ dispatch ----
 
-command=${1:-help}
+# --rig <id> can come before or after the command.
+args=()
+while (($#)); do
+  case $1 in
+  --rig)
+    RIG_SELECT=${2:?--rig needs a rig id (dev/rig ps lists them)}
+    shift
+    ;;
+  --rig=*) RIG_SELECT=${1#--rig=} ;;
+  *) args+=("$1") ;;
+  esac
+  shift
+done
+set -- "${args[@]:-help}"
+
+command=$1
 shift || true
 
 case $command in
@@ -406,11 +620,19 @@ ci) cmd_ci "$@" ;;
 check) cmd_check "$@" ;;
 status) cmd_status "$@" ;;
 screenshot) cmd_screenshot "$@" ;;
+show) cmd_view visible ;;
+hide) cmd_view hidden ;;
 restart-shell) cmd_restart_shell "$@" ;;
 seed) cmd_seed "$@" ;;
+ps) cmd_ps "$@" ;;
+reap) cmd_reap "$@" ;;
+adopt) cmd_adopt "$@" ;;
 logs) cmd_logs "$@" ;;
 exec) cmd_exec "$@" ;;
+probe) cmd_probe "$@" ;;
 verify-clean) cmd_verify_clean "$@" ;;
+selftest) cmd_selftest "$@" ;;
+_keeper) cmd_keeper "$@" ;;
 help | -h | --help) rig_usage ;;
 *)
   rig_fail "unknown command: $command"

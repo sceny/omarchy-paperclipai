@@ -238,6 +238,74 @@ rig_check_host_untouched() {
     bash -c "[[ '$RIG_PAPERCLIP_DATA' == '$RIG_HOME'/* ]]"
 }
 
+rig_no_rig_client_on_host() { [[ -z $(rig_host_rig_clients) ]]; }
+
+rig_check_hidden() {
+  # The default view must leave no trace on the owner's desktop. The hard part
+  # is asserted; whether the desktop is byte-for-byte the same is reported,
+  # because the owner may be using it while the rig runs.
+  rig_say "Hidden view"
+  if [[ $RIG_VIEW == hidden ]]; then
+    rig_assert hidden-no-host-window "a window of the rig is on the owner's desktop" \
+      rig_no_rig_client_on_host
+  else
+    rig_warn "the rig is visible on request; the hidden checks do not apply"
+  fi
+
+  local before="$RIG_EVIDENCE/host-before.json" after="$RIG_EVIDENCE/host-after-check.json" diff_out
+  if [[ ! -s $before ]] || ! jq -e '.available' "$before" >/dev/null 2>&1; then
+    rig_warn "no desktop session to compare against (CI or SSH login); host snapshot skipped"
+    return 0
+  fi
+  rig_host_snapshot "$after" || true
+  if diff_out=$(rig_host_compare "$before" "$after"); then
+    rig_ok "the owner's windows, workspaces and focus are as they were"
+  else
+    rig_warn "the owner's desktop differs from before the rig came up (the owner may have been using it):"
+    printf '%s\n' "$diff_out" >&2
+    printf '%s\n' "$diff_out" >"$RIG_EVIDENCE/host-diff.txt"
+  fi
+}
+
+rig_check_shell_services_off() {
+  # The nested shell must not run its own idle/lock services: a lock inside the
+  # rig covers the window and ends the run.
+  rig_say "Shell services"
+  local id
+  for id in "${RIG_SHELL_DISABLED_PLUGINS[@]}"; do
+    rig_record "service-off-$id" 0 bash -c \
+      "omarchy plugin list --json | jq -e --arg id '$id' 'any(.[]; .id == \$id and .enabled == false)'"
+  done
+}
+
+rig_check_lease() {
+  rig_say "Lease"
+  local keeper
+  keeper=$(<"$RIG_SESSION/keeper.pid") 2>/dev/null || keeper=""
+  rig_assert lease-keeper-alive "no live lease keeper for this rig" \
+    bash -c "[[ -n '$keeper' ]] && kill -0 '$keeper'"
+  rig_assert lease-state-live "the rig's own lease is not live" \
+    rig_lease_is_live
+  rig_assert lease-ports-unique "another rig reserved one of this rig's ports" \
+    rig_ports_are_unique
+  rig_assert lease-runtime-dir-own "the runtime dir is shared with another rig" \
+    bash -c "[[ '$RIG_RUNTIME_DIR' == '$RIG_RUNTIME_ROOT'/opr.* ]]"
+}
+
+rig_lease_is_live() { [[ $(rig_lease_state "$RIG_SESSION") == live ]]; }
+
+rig_ports_are_unique() {
+  local dir mine=0 port
+  for dir in $(rig_session_dirs); do
+    [[ ${dir##*/} == "$RIG_ID" ]] && continue
+    for port in http_port pg_port; do
+      [[ $(rig_state_read "$dir/rig.state" "$port" 2>/dev/null) == "$RIG_HTTP_PORT" ||
+        $(rig_state_read "$dir/rig.state" "$port" 2>/dev/null) == "$RIG_PG_PORT" ]] && mine=1
+    done
+  done
+  ((mine == 0))
+}
+
 rig_check_plugin_scripts_up() {
   rig_say "Plugin scripts, instance up"
   rig_pc_assert_isolated
@@ -313,8 +381,8 @@ rig_write_summary_file() {
   local out="$RIG_EVIDENCE/summary.txt" index
   {
     printf 'rig summary for %s\n' "$RIG_PLUGIN_ID"
-    printf 'mode=%s http_port=%s pg_port=%s instance=%s\n' \
-      "$RIG_MODE" "$RIG_HTTP_PORT" "$RIG_PG_PORT" "$RIG_INSTANCE_ID"
+    printf 'view=%s http_port=%s pg_port=%s instance=%s\n' \
+      "$RIG_VIEW" "$RIG_HTTP_PORT" "$RIG_PG_PORT" "$RIG_INSTANCE_ID"
     printf 'omarchy=%s\n\n' "$RIG_OMARCHY_PATH"
     for index in "${!RIG_CHECK_NAMES[@]}"; do
       printf '%-34s %s\n' "${RIG_CHECK_NAMES[$index]}" "${RIG_CHECK_RESULTS[$index]}"
