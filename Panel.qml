@@ -33,17 +33,24 @@ Panel {
 
   // Identical rows collapse into one, so a watchdog looping every fifteen
   // minutes reads as "Kai run failed ×115" rather than as a hundred rows.
-  readonly property var needGroups: Model.groupRows(service.report ? service.report.needs : [])
+  // The summary cards filter what the lists show, nothing else: the inbox
+  // setting, the bar's count and the cards' own numbers stay as they were.
+  property string cardFilter: ""
+  readonly property string activeFilter: Model.activeTileFilter(service.report, cardFilter)
+  onActiveFilterChanged: rowIndex = 0
+
+  readonly property var needGroups: Model.groupRows(
+    Model.filterNeedRows(service.report ? service.report.needs : [], activeFilter))
   readonly property int needsCap: 6
   property bool showAllRows: false
   readonly property var needs: showAllRows ? needGroups : needGroups.slice(0, needsCap)
-  readonly property var moving: service.report ? service.report.moving : []
+  readonly property var moving: Model.filterMovingRows(service.report ? service.report.moving : [], activeFilter)
   readonly property var action: Model.primaryAction(service.report)
   readonly property int rowCount: needs.length + moving.length
   readonly property var tiles: Model.statTiles(service.report)
   // How many open rows this list does not reach. Named, never hidden: a list
   // that stops without saying so is how a number stops matching its list.
-  readonly property int moreWaiting: Model.moreWaiting(service.report, listedRows(needs))
+  readonly property int moreWaiting: Model.moreWaiting(service.report, listedRows(needs), activeFilter)
   // The probe's own complaints, shown under the button that acts on them.
   readonly property var problems: service.problems
 
@@ -146,6 +153,7 @@ Panel {
       cursorActive = false
       rowIndex = 0
       showAllRows = false
+      cardFilter = ""
       retryArmed = false
       service.clearNotes()
       if (panelFlick) panelFlick.contentY = 0
@@ -256,7 +264,12 @@ Panel {
     // while agents work — so the shape itself never changes.
     iconComponent: Component {
       PaperclipMark {
-        anchors.fill: parent
+        // Sized from the stock bar icon font, like the glyph icons beside it,
+        // so the mark is as tall as they are rather than as tall as the
+        // whole icon canvas.
+        anchors.centerIn: parent
+        width: Style.bar.iconFont
+        height: Style.bar.iconFont
         thickness: 24
         color: root.markColor(service.tone)
         motion: root.motion
@@ -270,6 +283,15 @@ Panel {
       }
     }
 
+    // The icon canvas the stock widgets draw in. The bubble and the zzz sit
+    // on its corner, so they stay inside the box the icon occupies.
+    Item {
+      id: iconBox
+      anchors.centerIn: parent
+      width: Style.bar.iconCanvas
+      height: Style.bar.iconCanvas
+    }
+
     // While the plugin is quiet the bubble gives way to a zzz in the same
     // corner: the same spot, so the eye finds it where it looked for the
     // count, and a glyph rather than a colour, so it reads without one.
@@ -277,10 +299,8 @@ Panel {
       id: sleepMark
       visible: root.asleep
       textFormat: Text.PlainText
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.rightMargin: Style.space(1)
-      anchors.topMargin: Style.space(1)
+      anchors.right: iconBox.right
+      anchors.top: iconBox.top
       text: Model.GLYPH_SLEEP
       color: root.bar ? root.bar.barForeground : root.foreground
       font.family: root.fontFamily
@@ -299,10 +319,8 @@ Panel {
       height: badge.text !== "" ? Style.space(11) : Style.space(5)
       radius: height / 2
       color: root.badgeUrgent ? root.urgent : (root.bar ? root.bar.barForeground : root.foreground)
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.rightMargin: Style.space(2)
-      anchors.topMargin: Style.space(3)
+      anchors.right: iconBox.right
+      anchors.top: iconBox.top
 
       Behavior on color {
         enabled: root.motion
@@ -422,66 +440,68 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          PanelHero {
-            id: hero
+          Column {
             width: parent.width
-            title: "Paperclip"
-            meta: service.actionStatus !== "" ? service.actionStatus
-                                              : (service.report ? service.report.summary : "Checking…")
-            detail: service.report && service.report.health && service.report.health.version
-                      ? service.report.health.version : ""
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconOpacity: service.trouble ? 0.6 : 1.0
-            opacity: root.revealAt(0)
-            transform: Translate { y: root.revealLift(0) }
-            iconComponent: Component {
-              PaperclipMark {
-                implicitWidth: Style.space(30)
-                implicitHeight: Style.space(30)
-                thickness: 20
-                color: root.markColor(service.tone)
-                motion: root.motion && root.opened
-                working: !root.asleep && service.tone === "working"
-                attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+            spacing: Style.space(8)
 
-                Behavior on color {
-                  enabled: root.motion
-                  ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+            PanelHero {
+              id: hero
+              width: parent.width
+              title: "Paperclip"
+              meta: service.actionStatus !== "" ? service.actionStatus
+                                                : (service.report ? service.report.summary : "Checking…")
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              iconOpacity: service.trouble ? 0.6 : 1.0
+              opacity: root.revealAt(0)
+              transform: Translate { y: root.revealLift(0) }
+              iconComponent: Component {
+                PaperclipMark {
+                  implicitWidth: Style.space(30)
+                  implicitHeight: Style.space(30)
+                  thickness: 20
+                  color: root.markColor(service.tone)
+                  motion: root.motion && root.opened
+                  working: !root.asleep && service.tone === "working"
+                  attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+
+                  Behavior on color {
+                    enabled: root.motion
+                    ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+                  }
                 }
               }
-            }
-            trailingControl: Component {
-              PanelActionButton {
-                iconText: Model.GLYPH_OPEN
-                tooltipText: "Open Paperclip — hold Shift for a new window"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: service.openBoard(shiftWatch.shiftHeld)
+              trailingControl: Component {
+                PanelActionButton {
+                  iconText: Model.GLYPH_OPEN
+                  tooltipText: "Open Paperclip — hold Shift for a new window"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: service.openBoard(shiftWatch.shiftHeld)
 
-                // The button's own clicked() carries no modifiers, so read them
-                // from the press and let it fall through to the button below.
-                MouseArea {
-                  id: shiftWatch
-                  property bool shiftHeld: false
-                  anchors.fill: parent
-                  acceptedButtons: Qt.LeftButton
-                  onPressed: function(mouse) {
-                    shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                    mouse.accepted = false
+                  // The button's own clicked() carries no modifiers, so read them
+                  // from the press and let it fall through to the button below.
+                  MouseArea {
+                    id: shiftWatch
+                    property bool shiftHeld: false
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton
+                    onPressed: function(mouse) {
+                      shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                      mouse.accepted = false
+                    }
                   }
                 }
               }
             }
 
             // A hairline under the hero that sweeps while the probe is
-            // running. Quieter than a spinner, and as a child of the hero it
-            // costs the column no space of its own.
+            // running. Quieter than a spinner. It has a row of its own, always
+            // reserved, so it can never overlap the title or the subtitle and
+            // the panel does not shift when it fades in.
             Item {
               id: sweepTrack
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
+              width: parent.width
               height: Style.space(2)
               opacity: service.refreshing && root.motion ? 1 : 0
               clip: true
@@ -622,6 +642,8 @@ Panel {
                 required property var modelData
                 Layout.fillWidth: true
                 tile: modelData
+                selected: root.activeFilter === modelData.key
+                onClicked: root.cardFilter = Model.toggleTileFilter(root.activeFilter, modelData.key)
               }
             }
           }
@@ -713,7 +735,9 @@ Panel {
               spacing: Style.space(6)
 
               PanelSectionHeader {
-                text: "NEEDS YOU · " + service.inboxTotal
+                text: root.activeFilter === Model.TILE_FAILED
+                  ? "FAILED RUNS · " + Model.retryableCount(service.report)
+                  : "NEEDS YOU · " + service.inboxTotal
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 Layout.fillWidth: true
@@ -864,7 +888,7 @@ Panel {
           // Nothing waiting and nothing running is a good state, so it gets
           // the mark and a sentence rather than an empty hole in the panel.
           Column {
-            visible: root.rowCount === 0 && !service.trouble && root.action === null
+            visible: root.rowCount === 0 && !service.trouble && root.action === null && root.activeFilter === ""
             width: parent.width
             spacing: Style.space(8)
             topPadding: Style.space(6)
@@ -924,6 +948,17 @@ Panel {
               Text {
                 textFormat: Text.PlainText
                 text: "· " + Model.notificationLabel(service.notifyLevel)
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                visible: text !== ""
+                text: service.report && service.report.health && service.report.health.version
+                  ? "· v" + service.report.health.version : ""
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1319,25 +1354,60 @@ Panel {
     }
   }
 
-  // One of the three counts under the hero. A tile with something in it
-  // borrows that state's color; an empty one stays quiet chrome.
+  // One of the three counts under the hero, and a filter over the lists
+  // below it. A tile with something in it borrows that state's color and can
+  // be pressed; an empty one stays quiet chrome and does nothing.
   component StatTile: BorderSurface {
     id: statTile
     property var tile: null
+    property bool selected: false
     readonly property int value: tile ? Number(tile.value || 0) : 0
     readonly property color tone: root.toneColor(tile ? String(tile.tone) : "quiet")
+    readonly property bool pressable: value > 0
+    readonly property bool hovered: tileMouse.containsMouse
+
+    signal clicked()
 
     implicitHeight: tileColumn.implicitHeight + Style.space(16)
     radius: Style.cornerRadius
-    color: statTile.value > 0
-      ? Style.hoverFillFor(statTile.tone, statTile.tone)
-      : Style.normalFillFor(root.foreground, Color.accent)
-    borderSpec: Border.controlSpec("normal",
+    color: statTile.selected
+      ? Style.selectedFillFor(statTile.tone, statTile.tone)
+      : (statTile.value > 0
+        ? Style.hoverFillFor(statTile.tone, statTile.tone)
+        : Style.normalFillFor(root.foreground, Color.accent))
+    borderSpec: Border.controlSpec(
+      statTile.selected ? "selected" : (statTile.hovered ? "hover-cursor" : "normal"),
       statTile.value > 0 ? statTile.tone : root.foreground, Color.accent)
 
     Behavior on color {
       enabled: root.motion
       ColorAnimation { duration: 260; easing.type: Easing.OutCubic }
+    }
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.leftMargin: statTile.radius
+      anchors.rightMargin: statTile.radius
+      height: Style.space(2)
+      radius: height / 2
+      color: statTile.tone
+      opacity: statTile.selected ? 1 : 0
+
+      Behavior on opacity {
+        enabled: root.motion
+        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+      }
+    }
+
+    MouseArea {
+      id: tileMouse
+      anchors.fill: parent
+      hoverEnabled: statTile.pressable
+      enabled: statTile.pressable
+      cursorShape: statTile.pressable ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: statTile.clicked()
     }
 
     Column {

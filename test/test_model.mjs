@@ -64,6 +64,43 @@ group("the tiles report the three counts", () => {
   assert.deepEqual(empty.map((t) => t.tone), ["quiet", "quiet", "quiet"])
 })
 
+group("the cards filter the lists and never the counts", () => {
+  const report = {
+    attention: 3, working: 2, failedRuns: 1, inboxTotal: 3, retryableCount: 1,
+    needs: [{ kind: "failed_run", title: "a" }, { kind: "approval", title: "b" }, { kind: "approval", title: "c" }],
+    moving: [{ title: "w1" }, { title: "w2" }]
+  }
+  const need = (f) => Model.filterNeedRows(report.needs, f).map((r) => r.title)
+  const move = (f) => Model.filterMovingRows(report.moving, f).map((r) => r.title)
+
+  assert.deepEqual(need(""), ["a", "b", "c"])
+  assert.deepEqual(move(""), ["w1", "w2"])
+  assert.deepEqual(need(Model.TILE_ATTENTION), ["a", "b", "c"])
+  assert.deepEqual(move(Model.TILE_ATTENTION), [])
+  assert.deepEqual(need(Model.TILE_WORKING), [])
+  assert.deepEqual(move(Model.TILE_WORKING), ["w1", "w2"])
+  assert.deepEqual(need(Model.TILE_FAILED), ["a"])
+  assert.deepEqual(move(Model.TILE_FAILED), [])
+
+  // The card shows its own count whatever the filter hides.
+  assert.deepEqual(Model.statTiles(report).map((t) => t.value), [3, 2, 1])
+
+  // A card at zero cannot hold the filter; one with rows can.
+  assert.equal(Model.activeTileFilter(report, "failed"), "failed")
+  assert.equal(Model.activeTileFilter({ working: 0 }, "working"), "")
+  assert.equal(Model.activeTileFilter(report, "nonsense"), "")
+  assert.equal(Model.activeTileFilter(null, "attention"), "")
+
+  // Clicking the selected card clears it; another card replaces it.
+  assert.equal(Model.toggleTileFilter("", "failed"), "failed")
+  assert.equal(Model.toggleTileFilter("failed", "failed"), "")
+  assert.equal(Model.toggleTileFilter("failed", "working"), "working")
+
+  // Under the failed filter, "more waiting" counts failed runs, not the inbox.
+  assert.equal(Model.moreWaiting({ inboxTotal: 9, retryableCount: 4 }, 1, "failed"), 3)
+  assert.equal(Model.moreWaiting({ inboxTotal: 9, retryableCount: 4 }, 1, ""), 8)
+})
+
 group("the footer only advertises keys that do something", () => {
   // Nothing in the inbox: no row verbs, because there is no row to use them on.
   const quiet = Model.hintKeys({ state: "idle" }).map((h) => h.key)
