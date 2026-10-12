@@ -20,7 +20,7 @@ const BELL = ""
 // Every state the probe can put in a report. derive_state() in
 // bin/omarchy-paperclip-status is the other half of this list.
 const STATES = [
-  "unknown", "not-installed", "stopped", "needs-auth",
+  "unknown", "not-installed", "stopped", "needs-auth", "untrusted-listener",
   "probe-failed", "needs-you", "working", "idle"
 ]
 
@@ -39,6 +39,7 @@ group("the mark is a paperclip in every state", () => {
 
 group("state tones and labels", () => {
   assert.equal(Model.stateTone("stopped"), "alarm")
+  assert.equal(Model.stateTone("untrusted-listener"), "alarm")
   assert.equal(Model.stateTone("probe-failed"), "alarm")
   assert.equal(Model.stateTone("needs-you"), "attention")
   assert.equal(Model.stateTone("working"), "working")

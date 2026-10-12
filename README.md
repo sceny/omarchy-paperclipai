@@ -55,6 +55,22 @@ also in `journalctl --user -u sceny-plugins-follow-develop`.
   `systemctl --user --failed` shows it.
 - `test/test_follow_develop.sh` tests it against throwaway repos.
 
+## Tokens
+
+An instance outside local trusted mode wants a board token: put it in
+`$PAPERCLIP_OMARCHY_TOKEN`, or in `~/.local/state/omarchy/paperclipai/token`.
+The probe and the writer send it only where it is safe:
+
+- to a loopback address (`127.0.0.0/8`, `::1`, `localhost`) whose listening
+  socket belongs to your user, read from `/proc/net/tcp` and `tcp6`. If another
+  user's program holds the port, nothing is sent and the bar says
+  `untrusted-listener`. A Paperclip run by another user, or by Docker's root
+  proxy, shows up this way: run it as yourself, or use an `https` base;
+- to an `https` base;
+- never to plain `http` on another host.
+
+A redirect is never followed, and an answer over 4 MiB is an error.
+
 ## Snooze and focus
 
 Four states, shown in the panel's strip and on the bar icon (a zzz replaces the
@@ -102,6 +118,9 @@ commit is in `skills/upstream.list`.
   diff.
 
 ## Testing the plugin
+
+Unit checks, no desktop needed: `node test/test_model.mjs`, `node test/test_inbox.mjs`,
+`node test/test_transport.mjs`, `python3 -m unittest test/test_transport.py`.
 
 `dev/rig` tests the plugin end to end without touching your desktop or your
 Paperclip instance. It needs `Hyprland`, `labwc` and `wtype` (the hidden view), `quickshell`,
