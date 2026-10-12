@@ -168,7 +168,8 @@ Item {
                 // Every notification wears the mark: the words say what
                 // happened, the glyph says who is speaking.
                 "-g", String(item.glyph || Model.stateGlyph(root.instanceState)),
-                String(item.summary || "Paperclip"), String(item.body || "")]
+                Model.notificationSummary(item.summary || "Paperclip"),
+                Model.notificationBody(item.body || "")]
     var action = actionArgv(String(item.action || "open"), String(item.url || ""))
     if (action.length > 0) argv = argv.concat(["--exec"]).concat(action)
     Util.execArgv(argv)

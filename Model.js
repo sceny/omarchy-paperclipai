@@ -773,6 +773,32 @@ function diffNotifications(previous, next, level, seen) {
   return out
 }
 
+// Text from the instance reaches `omarchy-notification-send` as a positional.
+// A value that starts with a dash is read as one of its options
+// (--app-name=omarchy-action gets through Do Not Disturb, --image= sets a
+// picture), so a word joiner goes first: it prints as nothing and is not a dash.
+var WORD_JOINER = "\u2060"
+
+function neutralizeOption(text) {
+  var s = String(text === undefined || text === null ? "" : text)
+  return /^\s*-/.test(s) ? WORD_JOINER + s : s
+}
+
+// The shell draws a notification body as StyledText, so markup in it is markup.
+function escapeMarkup(text) {
+  return String(text === undefined || text === null ? "" : text)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
+// The summary is drawn as plain text; the body is not.
+function notificationSummary(text) {
+  return neutralizeOption(text)
+}
+
+function notificationBody(text) {
+  return neutralizeOption(escapeMarkup(text))
+}
+
 function mergeKeys(seen, keys) {
   var out = {}
   for (var a in seen) out[a] = true
@@ -837,6 +863,10 @@ if (typeof module !== "undefined" && module.exports) {
     hintKeys: hintKeys,
     primaryAction: primaryAction,
     diffNotifications: diffNotifications,
+    neutralizeOption: neutralizeOption,
+    escapeMarkup: escapeMarkup,
+    notificationSummary: notificationSummary,
+    notificationBody: notificationBody,
     SNOOZE_HOUR: SNOOZE_HOUR,
     SNOOZE_MORNING: SNOOZE_MORNING,
     FOCUS_LIMIT_MS: FOCUS_LIMIT_MS,
