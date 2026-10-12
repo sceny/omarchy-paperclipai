@@ -2,7 +2,7 @@
 # Open Paperclip, or one task inside it.
 #
 # Usage:
-#   omarchy-paperclip-open [--new-window] [url]
+#   omarchy-paperclip-open [--new-window] [--api-base base] [--instance name] [url]
 #
 # The url decides what a click does:
 #
@@ -28,6 +28,14 @@ while [[ ${1:-} == -* ]]; do
   case $1 in
   --new-window | --new) new_window=true ;;
   --focus) ;;
+  --api-base | --instance)
+    [[ $# -ge 2 ]] || {
+      pc_fail "Missing value for $1"
+      exit 1
+    }
+    if [[ $1 == --api-base ]]; then export PAPERCLIP_OMARCHY_API_BASE=${2%/}; else PAPERCLIP_INSTANCE=$2; fi
+    shift
+    ;;
   *)
     pc_fail "Unknown option: $1"
     exit 1
@@ -37,14 +45,17 @@ while [[ ${1:-} == -* ]]; do
 done
 
 url=${1:-}
-[[ -n $url ]] || url=$(pc_api_base)
+
+# The base is the one the panel built its urls on: the same settings the
+# status script reads, so both agree on what "the instance" is.
+base=$(pc_api_base)
+[[ -n $url ]] || url=$base
 
 # Only a url on the instance's own origin (scheme, host and port) reaches a
 # browser. A url from the API is data, not a command, and an app window has no
 # address bar to show where a page really is. The base must be followed by the
 # end, a path, a query or a fragment: never a userinfo, a longer host or port,
 # or a backslash.
-base=$(pc_api_base)
 lower_url=${url,,}
 lower_base=${base,,}
 if [[ $lower_url != "$lower_base" ]]; then

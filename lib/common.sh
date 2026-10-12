@@ -54,8 +54,12 @@ pc_api_base() {
   local url=""
   if [[ -r $info ]]; then
     url=$(jq -r '.dashboardUrl // empty' "$info" 2>/dev/null)
+    if [[ -z $url ]]; then
+      url=$(jq -r 'select((.host // "") != "" and (.port // "") != "") | "http://\(.host):\(.port)"' "$info" 2>/dev/null)
+    fi
   fi
-  printf '%s\n' "${url:-http://127.0.0.1:3100}"
+  url=${url:-http://127.0.0.1:3100}
+  printf '%s\n' "${url%/}"
 }
 
 pc_health_ok() {

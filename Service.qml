@@ -190,7 +190,7 @@ Item {
   // already there. A second window is only ever asked for by hand, by holding
   // Shift in the panel.
   function openArgv(url, newWindow) {
-    var argv = [openScript]
+    var argv = [openScript].concat(instanceArgv())
     if (newWindow) argv.push("--new-window")
     if (url) argv.push(String(url))
     return argv
