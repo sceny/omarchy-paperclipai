@@ -17,7 +17,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const script = path.join(root, "bin", "omarchy-paperclip-open")
 const BASE = "http://127.0.0.1:3199"
 
-function run(args, { windowOpen }) {
+function run(args, { windowOpen, clients }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-open-"))
   const log = path.join(dir, "calls.log")
   const stub = (name, body) => {
@@ -27,7 +27,9 @@ function run(args, { windowOpen }) {
   stub("omarchy-launch-webapp", `echo "launch $*" >> "${log}"`)
   stub("hyprctl", [
     `if [[ $1 == clients ]]; then`,
-    windowOpen
+    clients
+      ? `  echo '${JSON.stringify(clients)}'`
+      : windowOpen
       ? `  echo '[{"address":"0xabc","class":"brave-127.0.0.1__-Default","title":"Inbox - Paperclip","mapped":true}]'`
       : `  echo '[]'`,
     `else echo "focus $*" >> "${log}"; echo ok; fi`,
@@ -70,5 +72,24 @@ assert.deepEqual(r.calls, ["launch " + BASE], "Shift asks for a window of its ow
 r = run(["file:///etc/passwd"], { windowOpen: true })
 assert.notEqual(r.status, 0)
 assert.deepEqual(r.calls, [], "a non-http url reaches nothing")
+
+// A title is text any page can set. A window that only says "Paperclip" in its
+// title or class, with no instance host in its class, is never raised.
+const stranger = { address: "0xbad", class: "firefox", title: "Inbox - Paperclip", mapped: true }
+r = run([], { clients: [stranger] })
+assert.deepEqual(r.calls, ["launch " + BASE], "a title alone does not take the click")
+
+r = run([], { clients: [{ ...stranger, class: "Paperclip" }] })
+assert.deepEqual(r.calls, ["launch " + BASE], "an app name in the class alone does not take it either")
+
+// Several windows of the host: the one that also carries the app name wins.
+const hostOnly = { address: "0x111", class: "brave-127.0.0.1__-Default", title: "Docs", mapped: true }
+const hostAndName = { address: "0x222", class: "brave-127.0.0.1__-Default", title: "Inbox - Paperclip", mapped: true }
+r = run([], { clients: [stranger, hostOnly, hostAndName] })
+assert.equal(r.calls.length, 1)
+assert.match(r.calls[0], /^focus .*0x222/, "the host and name window is chosen among several")
+
+r = run([], { clients: [stranger, hostOnly] })
+assert.match(r.calls[0], /^focus .*0x111/, "a host window without the name is still the board's window")
 
 console.log("open: ok")

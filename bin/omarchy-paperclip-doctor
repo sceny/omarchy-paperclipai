@@ -82,6 +82,7 @@ while (($#)); do
 done
 
 if [[ -z $session ]]; then
+  pc_prune_sessions
   session=$(pc_state_dir)/doctor-$(date +%Y%m%d-%H%M%S)
   mkdir -p "$session"
 fi

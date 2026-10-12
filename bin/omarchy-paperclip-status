@@ -139,21 +139,33 @@ def resolve_api_base(cli_value: str, instance: str) -> str:
     return DEFAULT_API_BASE
 
 
-def read_token() -> str:
-    """Bearer token for an instance that is not in local trusted mode."""
+TOKEN_FILE_LOOSE = "token file is readable by others; chmod 600 it"
+
+
+def read_token_checked() -> tuple:
+    """(token, problem). A token file that others can read is not used."""
     from_env = env("PAPERCLIP_OMARCHY_TOKEN")
     if from_env:
-        return from_env
+        return from_env, ""
+    problem = ""
     for name in ("token", "board-token"):
         path = os.path.join(state_dir(), name)
         try:
             with open(path, "r", encoding="utf-8") as handle:
+                if os.fstat(handle.fileno()).st_mode & 0o077:
+                    problem = TOKEN_FILE_LOOSE
+                    continue
                 token = handle.read().strip()
                 if token:
-                    return token
+                    return token, problem
         except OSError:
             continue
-    return ""
+    return "", problem
+
+
+def read_token() -> str:
+    """Bearer token for an instance that is not in local trusted mode."""
+    return read_token_checked()[0]
 
 
 class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
@@ -712,8 +724,10 @@ def main(argv=None) -> int:
                         help="leave out every title, detail, name and url. For anything an AI session reads.")
     args = parser.parse_args(argv)
 
+    os.umask(0o077)
     instance = args.instance or env("PAPERCLIP_OMARCHY_INSTANCE", "default")
-    api = Api(resolve_api_base(args.api_base, instance), read_token(), max(0.5, args.timeout))
+    token, token_problem = read_token_checked()
+    api = Api(resolve_api_base(args.api_base, instance), token, max(0.5, args.timeout))
     name = args.webapp_name or env("PAPERCLIP_OMARCHY_WEBAPP_NAME", DEFAULT_WEBAPP_NAME)
     now = time.time()
     items = max(1, min(25, args.items))
@@ -745,7 +759,7 @@ def main(argv=None) -> int:
         "companies": [],
         "needs": [],
         "moving": [],
-        "problems": [],
+        "problems": [token_problem] if token_problem else [],
     }
 
     health = api.get("/api/health")

@@ -59,6 +59,21 @@ also in `journalctl --user -u sceny-plugins-follow-develop`.
 
 An instance outside local trusted mode wants a board token: put it in
 `$PAPERCLIP_OMARCHY_TOKEN`, or in `~/.local/state/omarchy/paperclipai/token`.
+
+Create the file so that only you can read it, without the token ever being in a
+command line:
+
+```sh
+mkdir -p -m 700 ~/.local/state/omarchy/paperclipai
+install -m 600 /dev/stdin ~/.local/state/omarchy/paperclipai/token
+# paste the token, press Enter, then Ctrl-D
+```
+
+A token file that group or others can read (`mode & 0o077`) is not used: the
+probe reports `token file is readable by others; chmod 600 it`, and an instance
+that wants a token shows as needing one. Fix it with
+`chmod 600 ~/.local/state/omarchy/paperclipai/token`.
+
 The probe and the writer send it only where it is safe:
 
 - to a loopback address (`127.0.0.0/8`, `::1`, `localhost`) whose listening

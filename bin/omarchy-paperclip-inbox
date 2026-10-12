@@ -365,6 +365,7 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args(argv)
 
+    os.umask(0o077)
     probe = load_probe()
     instance = args.instance or probe.env("PAPERCLIP_OMARCHY_INSTANCE", "default")
     writer = Writer(probe.resolve_api_base(args.api_base, instance),
