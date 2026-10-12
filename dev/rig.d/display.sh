@@ -276,6 +276,30 @@ rig_wake_parent() {
   WAYLAND_DISPLAY="${sock##*/}" timeout 5 wtype -M shift -m shift >/dev/null 2>&1 || true
 }
 
+rig_wake_parent_start() {
+  # Wake the parent without a pause from the moment its socket exists until the
+  # first frame is proven: Aquamarine's first request is flushed by the first
+  # event it receives, and every event that comes later loses the race to
+  # labwc's first configure. Bounded, so nothing outlives a failed start.
+  local deadline=$((SECONDS + 15))
+  until [[ -n $(ls "$RIG_RUNTIME_DIR"/wayland-* 2>/dev/null | grep -v '\.lock$') ]]; do
+    ((SECONDS < deadline)) || return 0
+    sleep 0.02
+  done
+  (
+    deadline=$((SECONDS + 25))
+    while ((SECONDS < deadline)); do rig_wake_parent; done
+  ) >/dev/null 2>&1 &
+  RIG_WAKER_PID=$!
+}
+
+rig_wake_parent_stop() {
+  [[ -n ${RIG_WAKER_PID:-} ]] || return 0
+  kill "$RIG_WAKER_PID" 2>/dev/null || true
+  wait "$RIG_WAKER_PID" 2>/dev/null || true
+  RIG_WAKER_PID=""
+}
+
 rig_render_node() {
   # The GPU render node the headless parent draws with. Hyprland nests only in a
   # parent that offers dmabuf, and that needs a GL renderer, so a render node
@@ -365,6 +389,7 @@ rig_start_compositor_once() {
       nohup labwc -C "$RIG_PARENT_CONF" -S "Hyprland -c $RIG_HYPR_CONF" >>"$log" 2>&1 &
     RIG_PARENT_PID=$!
     RIG_HYPR_PID=""
+    rig_wake_parent_start
   fi
   rig_state_set parent_pid "$RIG_PARENT_PID"
 
@@ -426,10 +451,15 @@ $(tail -n 8 "$log" 2>/dev/null)"
       sleep 0.25
     done
     if tail -n "+$log_from" "$log" | grep -q 'has never been configured'; then
+      rig_wake_parent_stop
       return 75
     fi
     rig_wake_parent
-    timeout --kill-after=2 6 grim -t ppm /dev/null >/dev/null 2>&1 || return 75
+    timeout --kill-after=2 6 grim -t ppm /dev/null >/dev/null 2>&1 || {
+      rig_wake_parent_stop
+      return 75
+    }
+    rig_wake_parent_stop
   fi
   rig_check_config_errors
   rig_ok "compositor up ($RIG_VIEW; pid $RIG_HYPR_PID, display $RIG_NESTED_DISPLAY)"
@@ -439,6 +469,7 @@ $(tail -n 8 "$log" 2>/dev/null)"
 rig_stop_display() {
   # The shell, then the compositor, then its parent. Used by teardown and by
   # show/hide, which swap the compositor and leave everything else running.
+  rig_wake_parent_stop
   if [[ -n ${RIG_SHELL_PID:-} ]]; then
     rig_step "stopping the nested shell (pid $RIG_SHELL_PID)"
     rig_kill_tree "$RIG_SHELL_PID" TERM
