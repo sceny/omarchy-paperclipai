@@ -14,9 +14,10 @@ never certifies their own change. The promises behind the list are in
 1. **Values from outside never reach a command as an option or a page as markup.**
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
-   is escaped wherever it is rendered as markup.
+   is escaped wherever it is rendered as markup. A url from the API opens only
+   on the API's own origin (scheme, host and port).
    Check: [`test/test_model.mjs`](../../test/test_model.mjs) (notification text),
-   [`test/test_open.mjs`](../../test/test_open.mjs) (window match),
+   [`test/test_open.mjs`](../../test/test_open.mjs) (window match, own origin),
    [`test/test_security_rules.py`](../../test/test_security_rules.py) (plain QML text).
 2. **Nothing a person or an agent wrote reaches an AI session.**
    Nothing a person or an agent wrote goes into the doctor bundle, `AGENTS.md`,

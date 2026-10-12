@@ -4,7 +4,8 @@
 //
 // What is pinned: a row's url always reaches the browser (a raised window
 // would stay on the page it was on), the board itself only raises, Shift
-// forces a window, and a non-http url never gets that far.
+// forces a window, and a url outside the instance's own origin never gets that
+// far.
 
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
@@ -17,7 +18,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const script = path.join(root, "bin", "omarchy-paperclip-open")
 const BASE = "http://127.0.0.1:3199"
 
-function run(args, { windowOpen, clients }) {
+function run(args, { windowOpen, clients, env = { PAPERCLIP_OMARCHY_API_BASE: BASE }, info }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-open-"))
   const log = path.join(dir, "calls.log")
   const stub = (name, body) => {
@@ -34,11 +35,16 @@ function run(args, { windowOpen, clients }) {
       : `  echo '[]'`,
     `else echo "focus $*" >> "${log}"; echo ok; fi`,
   ].join("\n"))
+  if (info !== undefined) {
+    const instanceDir = path.join(dir, ".paperclip", "instances", "default")
+    fs.mkdirSync(instanceDir, { recursive: true })
+    fs.writeFileSync(path.join(instanceDir, "runtime-info.json"), JSON.stringify(info))
+  }
   const result = spawnSync("bash", [script, ...args], {
     env: {
       PATH: dir + ":" + process.env.PATH,
       HOME: dir,
-      PAPERCLIP_OMARCHY_API_BASE: BASE,
+      ...env,
     },
     encoding: "utf8",
   })
@@ -72,6 +78,60 @@ assert.deepEqual(r.calls, ["launch " + BASE], "Shift asks for a window of its ow
 r = run(["file:///etc/passwd"], { windowOpen: true })
 assert.notEqual(r.status, 0)
 assert.deepEqual(r.calls, [], "a non-http url reaches nothing")
+
+// A url on another origin never reaches the browser, however it is spelled.
+for (const bad of [
+  "https://evil.example/login",
+  "http://evil.example",
+  "https://127.0.0.1:3199/SCE/issues/SCE-1",
+  "http://127.0.0.1:3198/",
+  "http://127.0.0.1:31990/",
+  "http://127.0.0.1/",
+  "http://127.0.0.1:3199.evil.example/",
+  "http://127.0.0.1:3199@evil.example/",
+  "http://127.0.0.1:3199\\@evil.example/",
+  "http://evil.example/?next=" + BASE,
+  "//evil.example/",
+  "ftp://127.0.0.1:3199/",
+]) {
+  r = run([bad], { windowOpen: true })
+  assert.notEqual(r.status, 0, "refused: " + bad)
+  assert.deepEqual(r.calls, [], "nothing is launched or raised for " + bad)
+}
+
+r = run(["--new-window", "https://evil.example/"], { windowOpen: false })
+assert.notEqual(r.status, 0)
+assert.deepEqual(r.calls, [], "--new-window does not widen the origin")
+
+r = run(["HTTP://127.0.0.1:3199/SCE/issues/SCE-2?a=1#b"], { windowOpen: false })
+assert.equal(r.status, 0, "scheme and host compare without case")
+assert.equal(r.calls.length, 1)
+
+// The panel builds its urls on the API base setting and hands the same base to
+// the open script, so the two agree even when it is not the runtime-info one.
+const OTHER = "http://localhost:3481"
+const noEnv = {}
+r = run(["--api-base", OTHER, OTHER + "/RIG/agents/a1"], { windowOpen: false, env: noEnv, info: { dashboardUrl: BASE } })
+assert.equal(r.status, 0, "a url on the configured api base opens")
+assert.deepEqual(r.calls, ["launch " + OTHER + "/RIG/agents/a1"])
+
+r = run(["--api-base", OTHER + "/", BASE + "/RIG/issues/RIG-1"], { windowOpen: false, env: noEnv, info: { dashboardUrl: BASE } })
+assert.notEqual(r.status, 0, "the runtime-info origin is refused once another base is given")
+assert.deepEqual(r.calls, [])
+
+r = run(["--api-base", OTHER, "http://localhost:34810/"], { windowOpen: false, env: noEnv })
+assert.notEqual(r.status, 0, "a longer port is refused against the given base")
+assert.deepEqual(r.calls, [])
+
+// Without a setting the open script reads the base the way the status script does.
+r = run([BASE + "/SCE/issues/SCE-3"], { windowOpen: false, env: noEnv, info: { dashboardUrl: BASE + "/" } })
+assert.equal(r.status, 0, "a trailing slash in dashboardUrl does not break the match")
+
+r = run([BASE + "/SCE/issues/SCE-3"], { windowOpen: false, env: noEnv, info: { host: "127.0.0.1", port: 3199 } })
+assert.equal(r.status, 0, "host and port stand in for a missing dashboardUrl")
+
+r = run(["http://127.0.0.1:3100/x"], { windowOpen: false, env: noEnv, info: { host: "127.0.0.1", port: 3199 } })
+assert.notEqual(r.status, 0, "the default port is not used when runtime-info names one")
 
 // A title is text any page can set. A window that only says "Paperclip" in its
 // title or class, with no instance host in its class, is never raised.
