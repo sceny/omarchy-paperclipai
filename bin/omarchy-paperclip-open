@@ -39,13 +39,23 @@ done
 url=${1:-}
 [[ -n $url ]] || url=$(pc_api_base)
 
-# Only http(s) reaches a browser. A url from the API is data, not a command.
-if [[ ! ${url,,} =~ ^https?:// ]]; then
-  pc_fail "Refusing to open a non-http url: $url"
-  exit 1
+# Only a url on the instance's own origin (scheme, host and port) reaches a
+# browser. A url from the API is data, not a command, and an app window has no
+# address bar to show where a page really is. The base must be followed by the
+# end, a path, a query or a fragment: never a userinfo, a longer host or port,
+# or a backslash.
+base=$(pc_api_base)
+lower_url=${url,,}
+lower_base=${base,,}
+if [[ $lower_url != "$lower_base" ]]; then
+  rest=${lower_url#"$lower_base"}
+  if [[ $rest == "$lower_url" || ! $rest =~ ^[/?#] ]]; then
+    pc_fail "Refusing to open a url outside the instance's own origin: $url"
+    exit 1
+  fi
 fi
 
-if [[ ${url%/} == "$(pc_api_base)" ]]; then
+if [[ ${url%/} == "$base" ]]; then
   [[ $new_window == false ]] && pc_focus_webapp_window && exit 0
 fi
 

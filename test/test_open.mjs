@@ -4,7 +4,8 @@
 //
 // What is pinned: a row's url always reaches the browser (a raised window
 // would stay on the page it was on), the board itself only raises, Shift
-// forces a window, and a non-http url never gets that far.
+// forces a window, and a url outside the instance's own origin never gets that
+// far.
 
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
@@ -72,6 +73,34 @@ assert.deepEqual(r.calls, ["launch " + BASE], "Shift asks for a window of its ow
 r = run(["file:///etc/passwd"], { windowOpen: true })
 assert.notEqual(r.status, 0)
 assert.deepEqual(r.calls, [], "a non-http url reaches nothing")
+
+// A url on another origin never reaches the browser, however it is spelled.
+for (const bad of [
+  "https://evil.example/login",
+  "http://evil.example",
+  "https://127.0.0.1:3199/SCE/issues/SCE-1",
+  "http://127.0.0.1:3198/",
+  "http://127.0.0.1:31990/",
+  "http://127.0.0.1/",
+  "http://127.0.0.1:3199.evil.example/",
+  "http://127.0.0.1:3199@evil.example/",
+  "http://127.0.0.1:3199\\@evil.example/",
+  "http://evil.example/?next=" + BASE,
+  "//evil.example/",
+  "ftp://127.0.0.1:3199/",
+]) {
+  r = run([bad], { windowOpen: true })
+  assert.notEqual(r.status, 0, "refused: " + bad)
+  assert.deepEqual(r.calls, [], "nothing is launched or raised for " + bad)
+}
+
+r = run(["--new-window", "https://evil.example/"], { windowOpen: false })
+assert.notEqual(r.status, 0)
+assert.deepEqual(r.calls, [], "--new-window does not widen the origin")
+
+r = run(["HTTP://127.0.0.1:3199/SCE/issues/SCE-2?a=1#b"], { windowOpen: false })
+assert.equal(r.status, 0, "scheme and host compare without case")
+assert.equal(r.calls.length, 1)
 
 // A title is text any page can set. A window that only says "Paperclip" in its
 // title or class, with no instance host in its class, is never raised.
