@@ -35,6 +35,12 @@ Contract (schemaVersion 1):
       "problems": [ "..." ]
     }
 
+`--redacted` prints the same contract with no text a person or an agent wrote:
+no titles, details, identifiers, urls, company or agent names. It keeps states,
+counts, kinds and ids, and every problem line is built from fixed words. The
+doctor hands this form to the AI session it opens, because an issue title is
+not something that session may read as an instruction.
+
 `attention` is the number of open inbox rows the same query returned — never
 `deskBadgeCount`, which counts rows that are *new today* and so falls to zero
 at midnight whether or not anybody did the work. The bar bubble is the length
@@ -46,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +80,9 @@ RETRY_KINDS = {"failed_run": "run", "recovery_action": "recovery"}
 # notification filter reads this list directly.
 ERROR_KINDS = ("failed_run", "agent_error_alert", "recovery_action")
 INBOX_FILTERS = ("needs-me", "all")
+# What a redacted report may carry from the server: one short word or id, no
+# spaces. Anything else is written by a person or an agent and is dropped.
+SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
 
 
 def env(name: str, fallback: str = "") -> str:
@@ -215,6 +225,12 @@ def find_cli() -> dict:
 def webapp(name: str) -> dict:
     path = os.path.join(home(), ".local", "share", "applications", name + ".desktop")
     return {"name": name, "path": path, "installed": os.path.isfile(path)}
+
+
+def safe_token(value) -> str:
+    """The value when it is a plain id or enum word, else an empty string."""
+    text = str(value or "")
+    return text if SAFE_TOKEN.match(text) else ""
 
 
 def short(text, limit: int = 120) -> str:
@@ -403,6 +419,63 @@ def company_moving(api: Api, company: dict, limit: int, now: float):
     return len(live), rows[:limit], failed
 
 
+def redact(report: dict) -> dict:
+    """The report with every free-text field left out. An allowlist, so a field
+    added to the report later stays out until someone adds it here."""
+    health = report.get("health") or {}
+    kept = {
+        "schemaVersion": report["schemaVersion"],
+        "redacted": True,
+        "generatedAt": report["generatedAt"],
+        "state": report["state"],
+        "summary": report["summary"],
+        "apiBase": report["apiBase"],
+        "instance": report["instance"],
+        "instanceExists": report["instanceExists"],
+        "cli": report["cli"],
+        "service": {k: v for k, v in report["service"].items() if k != "reason"},
+        "webapp": {"installed": report["webapp"]["installed"], "path": report["webapp"]["path"]},
+        "reachable": report["reachable"],
+        "authRequired": report["authRequired"],
+        "health": {k: safe_token(health.get(k)) for k in ("status", "version", "bootstrapStatus", "deploymentMode")},
+        "attention": report["attention"],
+        "working": report["working"],
+        "failedRuns": report["failedRuns"],
+        "inboxFilter": report["inboxFilter"],
+        "inboxTotal": report["inboxTotal"],
+        "inboxShown": report["inboxShown"],
+        "inboxCounts": {safe_token(k): v for k, v in report["inboxCounts"].items() if safe_token(k)},
+        "retryableCount": report["retryableCount"],
+        "inboxStale": report["inboxStale"],
+        "companies": [
+            {"id": c["id"], "prefix": safe_token(c["prefix"]), "attention": c["attention"], "working": c["working"]}
+            for c in report["companies"]
+        ],
+        "needs": [
+            {
+                "key": safe_token(n["key"]),
+                "kind": safe_token(n["kind"]),
+                "severity": safe_token(n["severity"]),
+                "companyId": n["companyId"],
+                "ago": safe_token(n["ago"]),
+                "itemKey": safe_token(n["itemKey"]),
+                "retryKind": safe_token(n["retryKind"]),
+                "retryable": n["retryable"],
+                "isError": n["isError"],
+                "hidden": n["hidden"],
+                "agentId": safe_token(n["agentId"]),
+                "runId": safe_token(n["runId"]),
+                "issueId": safe_token(n["issueId"]),
+                "actionId": safe_token(n["actionId"]),
+            }
+            for n in report["needs"]
+        ],
+        "moving": [{"key": safe_token(m["key"])} for m in report["moving"]],
+        "problems": report["problems"],
+    }
+    return kept
+
+
 def derive_state(report: dict) -> None:
     """One word for the bar icon, one line for the panel."""
     if not report["cli"]["installed"] and not report["instanceExists"]:
@@ -442,6 +515,8 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=6.0, help="per-request timeout seconds")
     parser.add_argument("--webapp-name", default="", help="web app launcher name")
     parser.add_argument("--compact", action="store_true", help="print one line of JSON")
+    parser.add_argument("--redacted", action="store_true",
+                        help="leave out every title, detail, name and url. For anything an AI session reads.")
     args = parser.parse_args(argv)
 
     instance = args.instance or env("PAPERCLIP_OMARCHY_INSTANCE", "default")
@@ -483,29 +558,31 @@ def main(argv=None) -> int:
     if isinstance(health, dict):
         report["reachable"] = True
         report["health"] = {
-            "status": str(health.get("status") or ""),
-            "version": str(health.get("version") or ""),
-            "bootstrapStatus": str(health.get("bootstrapStatus") or ""),
-            "deploymentMode": str(health.get("deploymentMode") or ""),
+            "status": safe_token(health.get("status")),
+            "version": safe_token(health.get("version")),
+            "bootstrapStatus": safe_token(health.get("bootstrapStatus")),
+            "deploymentMode": safe_token(health.get("deploymentMode")),
             "authReady": bool(health.get("authReady")),
         }
-        if str(health.get("status")) != "ok":
-            report["problems"].append("Instance health is '%s'" % health.get("status"))
-        if str(health.get("bootstrapStatus") or "ready") != "ready":
-            report["problems"].append("Setup is unfinished (%s)" % health.get("bootstrapStatus"))
+        if report["health"]["status"] != "ok":
+            report["problems"].append("Instance health is '%s'" % report["health"]["status"])
+        if (report["health"]["bootstrapStatus"] or "ready") != "ready":
+            report["problems"].append("Setup is unfinished (%s)" % report["health"]["bootstrapStatus"])
     elif api.last_error:
         report["problems"].append(api.last_error)
 
     if report["reachable"]:
         companies = as_list(api.get("/api/companies"), "companies")
         for company in companies[:MAX_COMPANIES]:
-            if not isinstance(company, dict) or not company.get("id"):
+            # The id goes into URL paths below, and a redacted report prints it.
+            if not isinstance(company, dict) or not safe_token(company.get("id")):
                 continue
+            company_label = str(company.get("id")) if args.redacted else (company.get("name") or "a company")
             attention, counts, needs = company_needs(api, company, inbox_items, now, inbox_filter)
             if attention is None:
                 report["problems"].append(
                     "Could not read %s's inbox (%s), so the count is incomplete"
-                    % (company.get("name") or "a company", api.last_error or "no answer"))
+                    % (company_label, api.last_error or "no answer"))
                 report["inboxStale"] = True
                 attention = 0
             working, moving, failed = company_moving(api, company, items, now)
@@ -541,6 +618,8 @@ def main(argv=None) -> int:
     if not report["webapp"]["installed"] and report["reachable"]:
         report["problems"].append("No web app launcher yet (run omarchy-paperclip-webapp)")
 
+    if args.redacted:
+        report = redact(report)
     text = json.dumps(report) if args.compact else json.dumps(report, indent=2)
     print(text)
     return 0
