@@ -6,6 +6,10 @@
 
 # shellcheck shell=bash
 
+# Everything these scripts create is private to the user: the state directory
+# holds a token, session bundles and snooze state.
+umask 077
+
 PAPERCLIP_PLUGIN_DIR=${PAPERCLIP_PLUGIN_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}
 PAPERCLIP_PLUGIN_ID=${PAPERCLIP_PLUGIN_ID:-sceny.paperclipai}
 PAPERCLIP_WEBAPP_NAME=${PAPERCLIP_OMARCHY_WEBAPP_NAME:-Paperclip}
@@ -14,7 +18,19 @@ PAPERCLIP_STATE_DIR=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/paperclipai
 
 pc_state_dir() {
   mkdir -p "$PAPERCLIP_STATE_DIR"
+  chmod 700 "$PAPERCLIP_STATE_DIR" 2>/dev/null
   printf '%s\n' "$PAPERCLIP_STATE_DIR"
+}
+
+pc_prune_sessions() {
+  # Doctor and agent sessions hold private text (prompts, logs). Keep them
+  # PAPERCLIP_SESSION_KEEP_DAYS days (7 by default), then remove them.
+  local dir
+  dir=$(pc_state_dir)
+  find "$dir" -mindepth 1 -maxdepth 1 -type d \
+    \( -name 'doctor-[0-9]*' -o -name 'session-[0-9]*' \) \
+    -mtime "+${PAPERCLIP_SESSION_KEEP_DAYS:-7}" -exec rm -rf -- {} + 2>/dev/null
+  return 0
 }
 
 pc_status() {
@@ -65,9 +81,9 @@ pc_webapp_window_address() {
   #
   # A browser web app window carries the instance host in its window class
   # (brave-127.0.0.1__-Default). That is what tells it apart from an ordinary
-  # browser window on the same machine. The window title is the second signal,
-  # because every Paperclip page ends in the app name. A window with both wins,
-  # so a second web app on the same host cannot catch the click.
+  # browser window. The host is required: a title alone is text any page can
+  # set, so a window that only claims the app name is never raised. The app
+  # name picks between several windows of the host.
   command -v hyprctl >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
 
@@ -89,7 +105,7 @@ pc_webapp_window_address() {
             name: ((((.class // "") + " " + (.title // "")) | lower) | contains($name | lower))
           }
       ]
-      | (map(select(.host and .name)) + map(select(.host)) + map(select(.name)))
+      | (map(select(.host and .name)) + map(select(.host)))
       | first.address // empty
     '
 }

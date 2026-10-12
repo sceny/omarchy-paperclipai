@@ -20,7 +20,7 @@ const BELL = ""
 // Every state the probe can put in a report. derive_state() in
 // bin/omarchy-paperclip-status is the other half of this list.
 const STATES = [
-  "unknown", "not-installed", "stopped", "needs-auth",
+  "unknown", "not-installed", "stopped", "needs-auth", "untrusted-listener",
   "probe-failed", "needs-you", "working", "idle"
 ]
 
@@ -39,6 +39,7 @@ group("the mark is a paperclip in every state", () => {
 
 group("state tones and labels", () => {
   assert.equal(Model.stateTone("stopped"), "alarm")
+  assert.equal(Model.stateTone("untrusted-listener"), "alarm")
   assert.equal(Model.stateTone("probe-failed"), "alarm")
   assert.equal(Model.stateTone("needs-you"), "attention")
   assert.equal(Model.stateTone("working"), "working")
@@ -534,6 +535,40 @@ group("a snooze that ends says so once, and never replays the backlog", () => {
   // Notifications off means off, snooze or no snooze.
   assert.equal(Model.wakeNotification(waiting, Model.NOTIFY_OFF), null)
   assert.equal(Model.wakeNotification(null, Model.NOTIFY_NEEDED), null)
+})
+
+group("text from the instance is inert in a notification", () => {
+  const WJ = "\u2060"
+  for (const hostile of ["--app-name=x", "-u", "--image=/x", "--exec", "-r", "  --replace-id=4"]) {
+    for (const make of [Model.notificationSummary, Model.notificationBody]) {
+      const out = make(hostile)
+      assert.ok(out.startsWith(WJ), JSON.stringify(hostile) + " must not start with a dash")
+      assert.ok(!/^\s*-/.test(out), JSON.stringify(out))
+      assert.ok(out.endsWith(hostile), "the words are kept")
+    }
+  }
+  assert.equal(Model.notificationBody("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;")
+  assert.equal(Model.notificationBody("a & b"), "a &amp; b")
+  assert.equal(Model.notificationBody("&lt;"), "&amp;lt;", "an entity is not decoded twice")
+  assert.equal(Model.notificationBody("-<b>"), WJ + "-&lt;b&gt;")
+  // The summary is drawn as plain text, so it is not escaped.
+  assert.equal(Model.notificationSummary("a <b> & c"), "a <b> & c")
+  assert.equal(Model.notificationSummary("Fix the build"), "Fix the build")
+  assert.equal(Model.notificationBody("-50% off"), WJ + "-50% off")
+  assert.equal(Model.notificationBody(undefined), "")
+  assert.equal(Model.notificationBody(null), "")
+
+  // A decision whose title is an option comes out of the diff, then through
+  // the same functions the service uses.
+  const row = { key: "a:1", kind: "approval", title: "--app-name=omarchy-action", detail: "<img src=x>", severity: "normal" }
+  const diff = Model.diffNotifications(
+    { reachable: true, needs: [], moving: [] },
+    { reachable: true, needs: [row], moving: [] },
+    Model.NOTIFY_NEEDED, {})
+  assert.equal(diff.notifications.length, 1)
+  const n = diff.notifications[0]
+  assert.ok(Model.notificationSummary(n.summary).startsWith(WJ))
+  assert.equal(Model.notificationBody(n.body), "&lt;img src=x&gt;")
 })
 
 console.log("all groups passed")

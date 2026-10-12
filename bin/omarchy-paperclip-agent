@@ -82,7 +82,10 @@ if [[ $list_only == true ]]; then
   exit 0
 fi
 
-[[ -n $session ]] || session=$(pc_state_dir)/session-$(date +%Y%m%d-%H%M%S)
+if [[ -z $session ]]; then
+  pc_prune_sessions
+  session=$(pc_state_dir)/session-$(date +%Y%m%d-%H%M%S)
+fi
 mkdir -p "$session/.claude/skills" || {
   pc_fail "Could not create the session directory: $session"
   exit 1
