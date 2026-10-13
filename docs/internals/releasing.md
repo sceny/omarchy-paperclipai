@@ -43,6 +43,22 @@ never certifies their own change. The promises behind the list are in
    renders only plugin-owned strings. The check is strict: it takes every
    `Text` and `Label` in `*.qml`, so a plugin-owned string gets the line too.
    Check: [`test/test_security_rules.py`](../../test/test_security_rules.py).
+7. **Private text never reaches a command line.**
+   `/proc/<pid>/cmdline` is readable by every local user. No title, reason,
+   name or other text from the instance or an agent is an element of an argv
+   the QML starts (`Util.execArgv`, `command:`, `.command =`). Every argv element
+   that is not a string literal is on a reviewed allowlist in the test, with the
+   reason it is not private text; a new one fails until a reviewer adds it. One
+   open instance (notification text, SCE-615) is listed apart and removed when
+   its fix lands.
+   Check: [`test/test_private_text.py`](../../test/test_private_text.py).
+8. **Nothing reads the clipboard without a paste by the user.**
+   No `*.qml` uses `TextInput`, `TextField`, `TextArea`, or an Omarchy `qs.Ui`
+   component built on one (`NumberField`, `MultiSelect`, `SearchableDropdown`):
+   Qt reads the clipboard in them by itself. No `clipboardText`, `wl-paste` or
+   `cliphist` anywhere. A future text field is a plain-text `TextEdit`, never
+   toggled read-only, as the Devices plugin's `PanelField`.
+   Check: [`test/test_private_text.py`](../../test/test_private_text.py).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a

@@ -15,7 +15,13 @@ run node test/test_inbox.mjs
 run node test/test_open.mjs
 run node test/test_transport.mjs
 run node test/test_doctor_session.mjs
-run python3 -m unittest test/test_transport.py test/test_security_rules.py test/test_state.py test/test_notify.py
+# Run by path, not as test.<name>: the standard library ships its own "test"
+# package that wins over this directory on some systems.
+run python3 test/test_transport.py
+run python3 test/test_security_rules.py
+run python3 test/test_private_text.py
+run python3 test/test_state.py
+run python3 test/test_notify.py
 run bash test/test_follow_develop.sh
 
 exit "$failed"
