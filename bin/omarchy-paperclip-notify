@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Raise one desktop notification from a JSON line on stdin.
+
+    echo '{"summary":"...","body":"..."}' | omarchy-paperclip-notify
+
+The words of a notification can come from the instance. Another local user can
+read the command line of every process, so the words never ride on one: they
+arrive on stdin and leave over D-Bus as typed arguments of
+org.freedesktop.Notifications.Notify, the call `omarchy-notification-send`
+makes. Nothing is parsed as an option on the way.
+
+One JSON object on the first line of stdin:
+
+    summary    plain-text headline
+    body       the description; the caller has already escaped markup in it
+    urgency    low | normal | critical          (default normal)
+    glyph      the omarchy-glyph hint           (default none)
+    appName    the notification's app name      (default Paperclip)
+    exec       argv run when the toast is clicked: a non-empty list of strings
+
+Exit 0 when the daemon took the call, 1 when it could not be reached, 2 for
+input that is not understood. Error lines never repeat the notification's words.
+"""
+
+import json
+import sys
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+URGENCY = {"low": 0, "normal": 1, "critical": 2}
+MAX_INPUT = 64 * 1024
+
+
+def fail(code, message):
+    print("omarchy-paperclip-notify: " + message, file=sys.stderr)
+    sys.exit(code)
+
+
+def text(value, name):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        fail(2, name + " must be a string")
+    return value
+
+
+def read_request():
+    line = sys.stdin.buffer.readline(MAX_INPUT + 1)
+    if len(line) > MAX_INPUT:
+        fail(2, "input is too large")
+    try:
+        request = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        fail(2, "stdin is not one JSON object")
+    if not isinstance(request, dict):
+        fail(2, "stdin is not one JSON object")
+    return request
+
+
+def build_hints(request):
+    urgency = text(request.get("urgency"), "urgency") or "normal"
+    if urgency not in URGENCY:
+        fail(2, "urgency must be low, normal or critical")
+    hints = {"urgency": GLib.Variant("y", URGENCY[urgency])}
+
+    glyph = text(request.get("glyph"), "glyph")
+    if glyph:
+        hints["omarchy-glyph"] = GLib.Variant("s", glyph)
+
+    argv = request.get("exec")
+    if argv is not None:
+        if (not isinstance(argv, list) or not argv
+                or not all(isinstance(word, str) for word in argv) or argv[0] == ""):
+            fail(2, "exec must be a non-empty list of strings")
+        # The same refusal omarchy-notification-send makes: a whole command in
+        # one word would name a program that does not exist.
+        if len(argv) == 1 and any(ch.isspace() for ch in argv[0]):
+            fail(2, "exec takes the command as separate words")
+        hints["omarchy-exec-argv"] = GLib.Variant(
+            "s", json.dumps(argv, ensure_ascii=False, separators=(",", ":")))
+    return hints
+
+
+def main():
+    request = read_request()
+    app_name = text(request.get("appName"), "appName") or "Paperclip"
+    summary = text(request.get("summary"), "summary")
+    body = text(request.get("body"), "body")
+    hints = build_hints(request)
+
+    # Signature susssasa{sv}i: app_name, replaces_id, app_icon, summary, body,
+    # actions (none), hints, expire_timeout (the daemon's default).
+    args = GLib.Variant("(susssasa{sv}i)",
+                        (app_name, 0, "", summary, body, [], hints, -1))
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                      "org.freedesktop.Notifications", "Notify", args,
+                      GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 5000, None)
+    except GLib.Error:
+        fail(1, "the notification daemon did not take the call")
+
+
+if __name__ == "__main__":
+    main()

@@ -15,8 +15,10 @@ never certifies their own change. The promises behind the list are in
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
    is escaped wherever it is rendered as markup. A url from the API opens only
-   on the API's own origin (scheme, host and port).
+   on the API's own origin (scheme, host and port). A notification's words go
+   to the daemon over D-Bus from stdin, not on a command line.
    Check: [`test/test_model.mjs`](../../test/test_model.mjs) (notification text),
+   [`test/test_notify.py`](../../test/test_notify.py) (notification over D-Bus),
    [`test/test_open.mjs`](../../test/test_open.mjs) (window match, own origin),
    [`test/test_security_rules.py`](../../test/test_security_rules.py) (plain QML text).
 2. **Nothing a person or an agent wrote reaches an AI session.**
