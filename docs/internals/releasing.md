@@ -48,9 +48,8 @@ never certifies their own change. The promises behind the list are in
    name or other text from the instance or an agent is an element of an argv
    the QML starts (`Util.execArgv`, `command:`, `.command =`). Every argv element
    that is not a string literal is on a reviewed allowlist in the test, with the
-   reason it is not private text; a new one fails until a reviewer adds it. One
-   open instance (notification text, SCE-615) is listed apart and removed when
-   its fix lands.
+   reason it is not private text; a new one fails until a reviewer adds it. The
+   notification text goes to `bin/omarchy-paperclip-notify` on stdin.
    Check: [`test/test_private_text.py`](../../test/test_private_text.py).
 8. **Nothing reads the clipboard without a paste by the user.**
    No `*.qml` uses `TextInput`, `TextField`, `TextArea`, or an Omarchy `qs.Ui`
