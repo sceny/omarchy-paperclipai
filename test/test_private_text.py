@@ -33,6 +33,7 @@ ALLOWED = {
     ("Service.qml", "statusScript"): "plugin script path",
     ("Service.qml", "serviceScript"): "plugin script path",
     ("Service.qml", "snoozeScript"): "plugin script path",
+    ("Service.qml", "notifyScript"): "plugin script path; the notification text goes to it on stdin",
     ("Service.qml", "inboxScript"): "plugin script path",
     ("Service.qml", "openScript"): "plugin script path",
     ("Service.qml", "setupScript"): "plugin script path",
@@ -79,8 +80,6 @@ ALLOWED = {
 # and is NOT reviewed-and-fine: the test fails when an entry stops matching, so the
 # fix has to delete it. Nothing may be added here to make a new case pass.
 OPEN = {
-    ("Service.qml", 'Model.notificationSummary(item.summary || "Paperclip")'): "SCE-615",
-    ("Service.qml", 'Model.notificationBody(item.body || "")'): "SCE-615",
 }
 
 # An allowlist entry that names one of these is text from the instance.
@@ -410,10 +409,10 @@ ASSIGNED = {
     ("Service.qml", "webappScript", "pluginDir + \"/bin/omarchy-paperclip-webapp\""): "the plugin's own script, in its folder",
     ("Service.qml", "openScript", "pluginDir + \"/bin/omarchy-paperclip-open\""): "the plugin's own script, in its folder",
     ("Service.qml", "snoozeScript", "pluginDir + \"/bin/omarchy-paperclip-snooze\""): "the plugin's own script, in its folder",
+    ("Service.qml", "notifyScript", "pluginDir + \"/bin/omarchy-paperclip-notify\""): "the plugin's own script, in its folder",
     ("Service.qml", "instance", "String(setting(\"instance\", \"\"))"): "the user's own `instance` setting",
     ("Service.qml", "apiBase", "String(setting(\"apiBase\", \"\"))"): "the user's own `apiBase` setting",
     ("Service.qml", "inboxFilter", "Model.normalizeInboxFilter(setting(\"inboxFilter\", Model.INBOX_NEEDS_ME))"): "a plugin enum (needs-me / all), normalised by Model.normalizeInboxFilter",
-    ("Service.qml", "action", "actionArgv(String(item.action || \"open\"), String(item.url || \"\"))"): "the vector actionArgv() returned; its returns are scanned",
     ("Service.qml", "clean", "String(value).replace(/[^A-Za-z0-9._-]/g, \"\")"): "setSetting() strips it to [A-Za-z0-9._-]",
     ("Service.qml", "company", "_retryCompanies[0]"): "a company id, taken from the rows' companyId (retryAll)",
 }

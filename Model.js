@@ -799,6 +799,21 @@ function notificationBody(text) {
   return neutralizeOption(escapeMarkup(text))
 }
 
+// What `bin/omarchy-paperclip-notify` reads from stdin. The words never go on a
+// command line, so there is nothing to neutralise against option parsing, but
+// the same functions run so the text stays exactly what it was.
+function notificationRequest(item, appName, fallbackGlyph, exec) {
+  var out = {
+    appName: String(appName || "Paperclip"),
+    urgency: String(item.urgency || "normal"),
+    glyph: String(item.glyph || fallbackGlyph || ""),
+    summary: notificationSummary(item.summary || "Paperclip"),
+    body: notificationBody(item.body || "")
+  }
+  if (exec && exec.length > 0) out.exec = exec.map(String)
+  return out
+}
+
 function mergeKeys(seen, keys) {
   var out = {}
   for (var a in seen) out[a] = true
@@ -867,6 +882,7 @@ if (typeof module !== "undefined" && module.exports) {
     escapeMarkup: escapeMarkup,
     notificationSummary: notificationSummary,
     notificationBody: notificationBody,
+    notificationRequest: notificationRequest,
     SNOOZE_HOUR: SNOOZE_HOUR,
     SNOOZE_MORNING: SNOOZE_MORNING,
     FOCUS_LIMIT_MS: FOCUS_LIMIT_MS,

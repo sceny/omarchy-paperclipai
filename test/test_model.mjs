@@ -571,4 +571,18 @@ group("text from the instance is inert in a notification", () => {
   assert.equal(Model.notificationBody(n.body), "&lt;img src=x&gt;")
 })
 
+group("a notification request carries the words as data for the helper", () => {
+  const WJ = "\u2060"
+  const item = { summary: "--app-name=x", body: "<b>why</b>", urgency: "critical", glyph: "G" }
+  const exec = ["/p/open", "https://127.0.0.1:3100/PAP-1"]
+  const req = Model.notificationRequest(item, "Paperclip", "F", exec)
+  assert.deepEqual(req, { appName: "Paperclip", urgency: "critical", glyph: "G",
+    summary: WJ + "--app-name=x", body: "&lt;b&gt;why&lt;/b&gt;", exec })
+  const bare = Model.notificationRequest({}, "", "F", [])
+  assert.deepEqual(bare, { appName: "Paperclip", urgency: "normal", glyph: "F",
+    summary: "Paperclip", body: "" })
+  assert.equal(Model.notificationRequest({ glyph: "" }, "omarchy-action", "", null).glyph, "")
+  assert.equal(JSON.parse(JSON.stringify(req)).exec[1], exec[1])
+})
+
 console.log("all groups passed")

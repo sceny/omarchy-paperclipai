@@ -56,6 +56,7 @@ dev/rig ...            # the plugin end to end, in its own Hyprland (see README)
 | `bin/omarchy-paperclip-setup` | first-run setup |
 | `bin/omarchy-paperclip-doctor` | build the bundle, repair, hand the rest to an AI session |
 | `bin/omarchy-paperclip-agent` | open the AI session over a directory |
+| `bin/omarchy-paperclip-notify` | raise one desktop notification; the words arrive on stdin and leave over D-Bus |
 | `bin/omarchy-paperclip-open` | open the web app or a page in it |
 | `bin/omarchy-paperclip-webapp` | create and raise the web app window |
 | `bin/omarchy-paperclip-snooze` | read and write the snooze state |

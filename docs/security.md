@@ -29,6 +29,10 @@ agent are written by someone else. The plugin treats them as data:
   it as markup it is escaped first.
 - **Never an option.** Passed to a command, it cannot be read as an option: a
   value with a leading `-` is neutralised, or follows `--`.
+- **Never on a command line.** Other users of the machine can read the command
+  line of every process. A notification's words reach the notification daemon
+  over D-Bus from the helper's stdin (`bin/omarchy-paperclip-notify`), not as
+  arguments of a program.
 - **Never an instruction.** It is not put in the doctor bundle, `AGENTS.md`,
   `prompt.txt` or any other input of an AI session. The bundle holds states,
   counts, kinds and ids. Log tails are listed by path, not inlined. The session
