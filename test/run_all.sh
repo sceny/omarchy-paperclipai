@@ -22,5 +22,6 @@ run python3 test/test_security_rules.py
 run python3 test/test_private_text.py
 run python3 test/test_state.py
 run bash test/test_follow_develop.sh
+run python3 test/test_release_prepare.py
 
 exit "$failed"
