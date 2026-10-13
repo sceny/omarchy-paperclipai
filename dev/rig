@@ -41,8 +41,10 @@
 #     and installs the plugin into a throwaway ~/.config/omarchy/plugins.
 #   * Paperclip under test is a throwaway instance on its own ports with its own
 #     data directory.
-#   * The sandbox has no session bus, so the plugin cannot reach the owner's
-#     systemd user units.
+#   * The sandbox has a session bus of its own (a private socket, no services,
+#     no systemd), never the owner's, so the plugin cannot reach the owner's
+#     systemd user units and the nested shell can still own the notification
+#     name.
 #   * Two rigs at the same time share nothing: their own runtime dirs, ports,
 #     sockets and process tags.
 #
@@ -88,7 +90,7 @@ rig_usage() {
 
 rig_require_tools() {
   local missing=() tool
-  for tool in Hyprland quickshell qs omarchy hyprctl grim jq curl git python3 ss flock setsid prlimit; do
+  for tool in Hyprland quickshell qs omarchy hyprctl grim jq curl git python3 ss flock setsid prlimit dbus-daemon; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
   if ((${#missing[@]})); then
@@ -197,6 +199,7 @@ cmd_up() {
   # The keeper starts before anything else does, so a run killed halfway
   # through `up` still leaves nothing behind.
   rig_keeper_start
+  rig_start_bus
 
   if ((RIG_NEEDS_PAPERCLIP)); then
     rig_pc_write_config
