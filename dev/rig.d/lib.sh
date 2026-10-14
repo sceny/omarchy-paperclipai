@@ -206,11 +206,15 @@ rig_export_env() {
   export RIG_STUB_LOG="$RIG_LOGS/stub-calls.log"
   : >"$RIG_STUB_LOG"
 
-  # No session bus means `systemctl --user` cannot reach the owner's units.
-  # That is deliberate: the plugin must never be able to start, stop or
-  # install paperclipai.service while under test.
+  # The owner's buses are never inherited, so `systemctl --user` cannot reach
+  # the owner's units: the plugin must never be able to start, stop or install
+  # paperclipai.service while under test. The only session bus the sandbox
+  # sees is the rig's own (rig_start_bus), which has no systemd behind it.
   unset DBUS_SESSION_BUS_ADDRESS
   unset DBUS_SYSTEM_BUS_ADDRESS
+  local bus
+  bus=$(rig_state_get bus_address) || bus=""
+  [[ -z $bus ]] || export DBUS_SESSION_BUS_ADDRESS="$bus"
   unset XDG_SESSION_ID XDG_SESSION_TYPE XDG_SESSION_DESKTOP XDG_VTNR
   unset NOTIFY_SOCKET
 
@@ -241,6 +245,56 @@ rig_export_env() {
   # Quickshell must not hot-reload the shell out from under a check.
   export QS_DISABLE_FILE_WATCHER=1
   export QS_NO_RELOAD_POPUP=1
+}
+
+# ------------------------------------------------------------------- bus ----
+
+rig_start_bus() {
+  # A session bus of the rig's own, so the nested shell can own
+  # org.freedesktop.Notifications and a plugin can raise a toast. It listens on
+  # a socket inside the rig's private runtime dir, loads no service files (so
+  # nothing on the host is activated by a name lookup) and has no systemd
+  # behind it. It carries the rig tag, so teardown and `reap` end it.
+  local sock="$RIG_RUNTIME_DIR/bus" conf="$RIG_SESSION/bus.conf" log="$RIG_LOGS/bus.log"
+  command -v dbus-daemon >/dev/null 2>&1 ||
+    rig_die "dbus-daemon is missing; it is part of the dbus package"
+  ((${#sock} <= 107)) || rig_die "guard: $sock is too long for a socket path"
+  cat >"$conf" <<CONF
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:path=$sock</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+CONF
+  nohup dbus-daemon --config-file="$conf" --nofork --nopidfile >>"$log" 2>&1 &
+  local pid=$! deadline=$((SECONDS + 10))
+  until [[ -S $sock ]]; do
+    kill -0 "$pid" 2>/dev/null || rig_die "the rig's session bus died; see $log"
+    ((SECONDS < deadline)) || rig_die "the rig's session bus never opened $sock; see $log"
+    sleep 0.1
+  done
+  rig_state_set bus_pid "$pid"
+  rig_state_set bus_address "unix:path=$sock"
+  rig_export_env
+  rig_guard_own_bus
+  rig_guard_no_host_systemd
+  rig_ok "session bus of the rig's own (pid $pid)"
+}
+
+rig_guard_own_bus() {
+  # Whatever bus the sandbox now sees must be the rig's socket, not the owner's.
+  local want="unix:path=$RIG_RUNTIME_DIR/bus"
+  [[ ${DBUS_SESSION_BUS_ADDRESS:-} == "$want" ]] ||
+    rig_die "guard: the session bus is '${DBUS_SESSION_BUS_ADDRESS:-}', not the rig's $want"
+  [[ -z ${DBUS_SYSTEM_BUS_ADDRESS:-} ]] ||
+    rig_die "guard: a system bus address is set in the sandbox"
 }
 
 # ---------------------------------------------------------------- guards ----

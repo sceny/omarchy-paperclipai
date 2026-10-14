@@ -236,7 +236,7 @@ see every run's rigs).
 | Desktop             | The shell under test runs in its own Hyprland with its own private `XDG_RUNTIME_DIR` (`/tmp/opr.<tag>`, mode 0700, never under `/run/user`). The host Hyprland, bar and shell are never restarted or reconfigured. |
 | Config and data     | Throwaway `HOME` and `XDG_*` under the rig's session directory. The plugin is installed into that, never into `~/.config`. |
 | Paperclip           | A separate instance directory, HTTP port and Postgres port, created and destroyed by the rig. The ports of the default instance are refused. |
-| systemd, D-Bus      | No session bus in the sandbox, so the plugin cannot reach your user units.                  |
+| systemd, D-Bus      | A session bus of its own (a private socket in the rig's runtime dir, no services, no systemd), never yours. The plugin cannot reach your user units, and the nested shell can own the notification name, so a toast is a real one. |
 | Browser and terminal | Recording stubs. A check asserts the URL the plugin computed; it never launches Brave.      |
 | Seat and input      | `LIBSEAT_BACKEND=seatd` with no socket: the compositor cannot take your session, GPU or keyboard. |
 
