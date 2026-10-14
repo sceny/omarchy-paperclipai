@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The release workflow's one reading of a version (.github/workflows/release.yml):
+# writes the CHANGELOG section of manifest.json's version to the file given and
+# prints `version=X.Y.Z` and `tagged=true|false`, ready for $GITHUB_OUTPUT.
+set -euo pipefail
+notes=${1:?usage: dev/release-notes <notes-file>}
+version=$(jq -r .version manifest.json)
+# The section under "## X.Y.Z — date", up to the next "## ", without the
+# blank lines around it.
+awk -v v="$version" '
+  index($0, "## " v " ") == 1 { found = 1; next }
+  found && /^## / { exit }
+  found { print }
+' CHANGELOG.md | sed -e '/[^[:space:]]/,$!d' | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}' > "$notes"
+echo "version=$version"
+if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+  echo "tagged=true"
+else
+  echo "tagged=false"
+fi

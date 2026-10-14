@@ -38,6 +38,7 @@ Item {
   readonly property string serviceScript: pluginDir + "/bin/omarchy-paperclip-service"
   readonly property string webappScript: pluginDir + "/bin/omarchy-paperclip-webapp"
   readonly property string openScript: pluginDir + "/bin/omarchy-paperclip-open"
+  readonly property string notifyScript: pluginDir + "/bin/omarchy-paperclip-notify"
   readonly property string snoozeScript: pluginDir + "/bin/omarchy-paperclip-snooze"
 
   readonly property string notifyLevel: Model.normalizeNotifyLevel(setting("notifications", Model.NOTIFY_NEEDED))
@@ -163,15 +164,15 @@ Item {
     if (!item) return
     // `omarchy-action` is the one app name Omarchy's Do Not Disturb lets
     // through, which is exactly what a focus session asks for.
-    var argv = ["omarchy-notification-send", "--app-name", quiet.bypass ? "omarchy-action" : "Paperclip",
-                "-u", String(item.urgency || "normal"),
-                // Every notification wears the mark: the words say what
-                // happened, the glyph says who is speaking.
-                "-g", String(item.glyph || Model.stateGlyph(root.instanceState)),
-                String(item.summary || "Paperclip"), String(item.body || "")]
-    var action = actionArgv(String(item.action || "open"), String(item.url || ""))
-    if (action.length > 0) argv = argv.concat(["--exec"]).concat(action)
-    Util.execArgv(argv)
+    // Every notification wears the mark: the words say what happened, the
+    // glyph says who is speaking. The words go to the helper on stdin and
+    // leave over D-Bus: they are never on a command line.
+    var request = Model.notificationRequest(item, quiet.bypass ? "omarchy-action" : "Paperclip",
+                                            Model.stateGlyph(root.instanceState),
+                                            actionArgv(String(item.action || "open"), String(item.url || "")))
+    var sender = notifyComponent.createObject(root, { payload: JSON.stringify(request) + "\n" })
+    sender.command = [notifyScript]
+    sender.running = true
   }
 
   // The argv a notification click (or a panel button) runs. Built as a vector
@@ -189,7 +190,7 @@ Item {
   // already there. A second window is only ever asked for by hand, by holding
   // Shift in the panel.
   function openArgv(url, newWindow) {
-    var argv = [openScript]
+    var argv = [openScript].concat(instanceArgv())
     if (newWindow) argv.push("--new-window")
     if (url) argv.push(String(url))
     return argv
@@ -644,6 +645,17 @@ Item {
     interval: 30
     repeat: false
     onTriggered: root.drain()
+  }
+
+  Component {
+    // One short-lived helper per notification; the words arrive on stdin.
+    id: notifyComponent
+    Process {
+      property string payload: ""
+      stdinEnabled: true
+      onStarted: write(payload)
+      onExited: destroy()
+    }
   }
 
   Process {

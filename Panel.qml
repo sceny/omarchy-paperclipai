@@ -357,6 +357,7 @@ Panel {
       Text {
         id: badge
         anchors.centerIn: parent
+        textFormat: Text.PlainText
         text: service.showCount ? Model.badgeText(service.report) : ""
         color: root.bar ? root.bar.background : root.panelBackground
         font.family: root.fontFamily
