@@ -33,6 +33,30 @@ documents below, before you change, review or release anything.
    tests use made-up values.
 8. A change is a branch from `develop` and a pull request into `develop`.
    `main`, releases and the marketplace are the plugin manager's.
+9. **Contributor code runs only after the owner has read about it and
+   approved it, head by head.** Contributor code is any commit not written by
+   the owner or a Sceny agent: a fork's pull request, an outside author's
+   commit, a bot's dependency bump. A Sceny branch holding such a commit counts
+   as contributor code until that commit has merged into `develop` through this
+   rule.
+   1. **Each new head is reviewed inside Sceny first, by reading only.** Panel
+      QA reviews the code and the Plugin Security Reviewer evaluates its
+      safety, both from the diff, without checking it out or running anything.
+      Both results go on the Paperclip task only, never on GitHub.
+   2. **Nothing goes on the pull request meanwhile:** no comment, review, label
+      or CI approval, until the owner has read both results.
+   3. **The owner's go is *Approve workflows to run* on that head.** No agent
+      ever presses it. Each new push needs a new approval (the repository
+      requires approval for all external contributors).
+   4. **After the go, for that head only:** CI runs, and Panel QA runs the head
+      in the sandbox (`dev/sandbox run`): its tests, the rig check and
+      screenshots. Never in the plain rig, never on the host. Then Panel QA
+      posts the review on the pull request. A newer head starts again at 1.
+   5. **It merges into `develop`** (which reaches the owner's installed copy)
+      only after the sandbox run passes on an approved head. Until
+      `dev/sandbox` has passed its security review, contributor code runs
+      nowhere on this machine, even after the go; only CI runs. This repository
+      has no `dev/sandbox` yet: Devices' `dev/sandbox` is the one to extend.
 
 ## Checks
 
