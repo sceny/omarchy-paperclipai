@@ -195,6 +195,33 @@ check that exists nor a `pending` mark, so the list and `test/` cannot drift
 apart.
 
 
+## Public text of a pull request
+
+`dev/public-text-check` holds the rules in `dev/public-text-rules.json` and
+fails the `public-text` check on a pull request whose body, comment, review or
+review comment: names the setup (`public-text-environment`: the tools, paths,
+test counts, task numbers); says something is left with no issue reference in
+its bullet or paragraph (`open-item-no-owner`); or names another repository's
+issue without its owner (`unlinked-reference`). The failure names the text's
+URL, the check and the matched words; the author or reviewer edits the text and
+the check runs again on the edit. Every run reads all the pull request's text
+through the API, so a plain comment is read on the next run of any event.
+
+- Paperclip is this plugin's product: only the words for the tracker that
+  runs our work (`Paperclip task`, `board`, `ticket`, `heartbeat`) fail.
+- A pull request about a tool may name it (`allowed_when_changed`); a pattern
+  that catches a product word gets an exception in the rules file and a case
+  in `test/test_public_text.py`, which holds a failing example of every class.
+- The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
+  task numbers, dates and the owner's words as history, in the unit tests
+  (`dev/public-text-check --standing`).
+- `public-text` is a required status check on `develop` (a repository ruleset,
+  no bypass). A direct push to `develop` is refused, so the `release` workflow
+  posts a `public-text` success status on the `main` commit it brings
+  `develop` level with (a push to `main` has no pull request text).
+- The checker and its rules are the same files as in `sceny/omarchy-devices`;
+  a change to a class goes to both repositories.
+
 ## Every pull request into `main`: the marketplace's checks
 
 The `marketplace-check` job runs the marketplace's own validation and
