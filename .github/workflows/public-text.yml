@@ -1,0 +1,38 @@
+name: public-text
+
+# The company's rules for public text, checked by a script (dev/public-text-check):
+# a pull request's body, comments, reviews and review comments name no setup of
+# ours, leave nothing open without an issue and name no other repository's issue
+# without its owner. Every run reads all of them again through the API, so a
+# plain comment (an issue_comment run takes effect only from the default branch)
+# is read on the next run of any event below. The review events run from the
+# pull request's merge ref, so this file works before a release reaches main.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: public-text-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  public-text:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Public text against the rules
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 dev/public-text-check
