@@ -66,6 +66,13 @@ dev/rig selftest       # the rig's own lease and reap logic; no compositor
 dev/rig ...            # the plugin end to end, in its own Hyprland (see README)
 ```
 
+The `public-text` check runs on every pull request (a required status check on
+`develop`): the body, comments, reviews and review comments name no setup of
+ours, leave nothing open without an issue and name no other repository's issue
+without its owner. Write them so (`docs/internals/releasing.md`, *Public text
+of a pull request*); `dev/public-text-check --pr N` (with `GITHUB_TOKEN`)
+reads a pull request's text against the rules.
+
 ## Releasing
 
 Releasing a version to Omarchy is always the owner's call. The steps below run
