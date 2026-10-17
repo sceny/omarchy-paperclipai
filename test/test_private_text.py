@@ -93,9 +93,11 @@ TEXT_WORDS = re.compile(r"\b(summary|body|title|detail|details|whyNow|label|text
 SINK_CALL = re.compile(r"(?<![\w.])(?:Util\.execArgv|Quickshell\.execDetached|execDetached)\s*\(|"
                        r"(?<![\w.])enqueue\s*\(|\.exec\s*\(")
 ARGV_CALL = re.compile(r"\b(\w*[Aa]rgv)\s*\(")
-ARGV_ASSIGN = re.compile(r"(?<![\w.])argv\s*=(?![=>])")
+# `=` and every compound form of it (`+=`, `||=`, `<<=`, ...), but not `==`, `===`, `=>`, `<=`, `>=`, `!=`.
+ASSIGN_OP = r"(?:\*\*|<<|>>>?|&&|\|\||\?\?|[-+*/%&|^])?=(?![=>])"
+ARGV_ASSIGN = re.compile(r"(?<![\w.])argv\s*" + ASSIGN_OP)
 ARGV_PUSH = re.compile(r"(?<![\w.])argv\.push\s*\(")
-COMMAND_ASSIGN = re.compile(r"(?:\.command\s*=(?!=)|(?<![\w.])command\s*:)")
+COMMAND_ASSIGN = re.compile(r"(?:\.command\s*" + ASSIGN_OP + r"|(?<![\w.])command\s*:)")
 ARGV_FUNCTION = re.compile(r"function\s+(\w*[Aa]rgv)\s*\(")
 
 FORBIDDEN_TYPES = ["TextInput", "TextField", "TextArea", "NumberField", "MultiSelect", "SearchableDropdown"]
@@ -434,7 +436,7 @@ def assignments(code, name):
     """(index, expression) for every value `name` is given in the file."""
     word = re.escape(name)
     found = []
-    for m in re.finditer(r"(?<![\w.])(?:(?:var|let|const)\s+)?%s\s*=(?![=>])\s*" % word, code):
+    for m in re.finditer(r"(?<![\w.])(?:(?:var|let|const)\s+)?%s\s*%s\s*" % (word, ASSIGN_OP), code):
         found.append((m.start(), statement(code, m.end())))
     for m in re.finditer(r"\bproperty\s+[\w<>]+\s+%s\s*:\s*" % word, code):
         found.append((m.start(), statement(code, m.end())))
@@ -678,6 +680,9 @@ class C1NoPrivateTextOnArgv(unittest.TestCase):
             "process command": 'Process { command: ["sh", "-c", row.detail] }',
             "command assignment": 'function f() { p.command = ["echo", reason] }',
             "argv push": 'function f(row) { var argv = ["a"]; argv.push(row.whyNow) }',
+            "argv compound assignment": 'function f(row) { var argv = ["a"]; argv += [row.title] }',
+            "argv logical assignment": 'function f(row) { var argv; argv ||= ["a", row.title] }',
+            "command compound assignment": 'function f() { p.command += [reason] }',
             "argv concat": 'function f(row) { var argv = ["a"]; argv = argv.concat(["--t", row.label]) }',
             "ternary branch": 'function f(r) { var argv = r ? ["a", r.title] : ["b"] }',
             "builder returns text": 'function noteArgv(item) { return ["omarchy-osd", item.title] }',
@@ -689,6 +694,14 @@ class C1NoPrivateTextOnArgv(unittest.TestCase):
         for label, src in cases.items():
             bad, _ = c1_violations("planted.qml", src)
             self.assertTrue(bad, "planted case passed the scan: " + label)
+
+    def test_a_comparison_is_not_an_assignment(self):
+        allowed = {("p.qml", "verb"): "x y z"}
+        src = ('function f(item) { var verb = "open"; if (verb == item.title || verb === item.body || verb != item.name '
+               '|| verb <= item.x || verb >= item.y) return; var argv = ["a"]; if (argv == item.title) return; '
+               'Util.execArgv(["x", verb]) }')
+        self.assertEqual(c1_violations("p.qml", src, allowed, {})[0], [])
+        self.assertEqual(laundered("p.qml", src, allowed, {}), [])
 
     def test_exec_on_any_receiver_is_a_sink(self):
         for label, src in {
@@ -727,6 +740,8 @@ class C1NoPrivateTextOnArgv(unittest.TestCase):
             "clean": 'function f(item) { const clean = item.label; Util.execArgv(["x", clean]) }',
             "instance": 'function f(item) { var instance = item.whyNow; Util.execArgv(["x", instance]) }',
             "a property binding": 'Item { property string verb: row.title }',
+            "a compound assignment": 'function f(item) { var verb = ""; verb += item.title; Util.execArgv(["x", verb]) }',
+            "a logical assignment": 'function f(item) { var url; url ??= item.title; Util.execArgv(["x", url]) }',
             "a loop": 'function f(rows) { for (var id of rows.titles) Util.execArgv(["x", id]) }',
             "a ternary": 'function f(row) { var verb = ok ? "open" : row.title }',
             "a parameter passed text": 'function f(x) { var verb = x; Util.execArgv(["x", verb]) }\nfunction g(row) { f(row.title) }',
