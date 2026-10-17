@@ -64,9 +64,10 @@ pc_api_base() {
 
 pc_health_ok() {
   # Is the instance answering right now?
-  local base
+  local base body
   base=$(pc_api_base)
-  curl -fsS --max-time 4 "$base/api/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1
+  body=$(curl -fs --max-time 4 "$base/api/health") || return 1
+  jq -e '.status == "ok"' <<<"$body" >/dev/null 2>&1
 }
 
 pc_wait_for_health() {
@@ -163,7 +164,7 @@ pc_notify() {
 pc_node_ok() {
   # Paperclip needs Node 24.11 or newer.
   local version major minor
-  command -v node >/dev/null 2>&1 || return 1
+  type -P node >/dev/null 2>&1 || return 1
   version=$(node --version 2>/dev/null)
   version=${version#v}
   major=${version%%.*}
