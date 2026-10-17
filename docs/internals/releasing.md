@@ -157,8 +157,8 @@ never certifies their own change. The promises behind the list are in
    files are untrusted data.
    Check: [`test/test_doctor_session.mjs`](../../test/test_doctor_session.mjs).
 3. **HTTP clients are boxed in.**
-   They follow no redirects, cap response size, and send the token only to an
-   own-uid loopback listener or over https.
+   They follow no redirects, cap response size, and send nothing, token or not,
+   except to an own-uid loopback listener or over https.
    Check: [`test/test_transport.py`](../../test/test_transport.py),
    [`test/test_transport.mjs`](../../test/test_transport.mjs).
 4. **State is private and does not pile up.**

@@ -255,13 +255,13 @@ def loopback_addresses(host: str):
 
 
 def token_verdict(base: str, uid_lookup=None, uid=None):
-    """May the token go to `base`? One of "send", "no-listener", "untrusted",
+    """May a request go to `base`? One of "send", "no-listener", "untrusted",
     "insecure".
 
     https goes anywhere: the certificate names the host. Plain http goes only to
     a loopback address, and only when every socket listening there is this
-    user's. Another user can bind that port when Paperclip is down, and the
-    token must not reach them. `uid_lookup(address, port)` returns the owner
+    user's. Another user can bind that port when Paperclip is down, and neither
+    the token nor any request must reach them. `uid_lookup(address, port)` returns the owner
     uids of the matching LISTEN sockets, or None when it cannot tell.
     """
     parts = urllib.parse.urlsplit(base)
@@ -294,16 +294,17 @@ def fetch(base: str, token: str, method: str, path: str, body=None, timeout: flo
           uid_lookup=None) -> Reply:
     """The one HTTP request both clients make. It never raises.
 
-    The token is attached only after `token_verdict` says the listener is the
-    user's own (or https), a redirect is never followed, and no more than
+    Nothing is sent, token or not, until `token_verdict` says the listener is
+    the user's own (or https): a program another user runs on Paperclip's port
+    would otherwise feed the panel invented rows, take its writes and answer
+    them as done. A redirect is never followed, and no more than
     MAX_BODY_BYTES of any body is read.
     """
-    if token:
-        verdict = token_verdict(base, uid_lookup)
-        if verdict == "no-listener":
-            return Reply(error="nothing is listening", code="no-listener")
-        if verdict != "send":
-            return Reply(error="token withheld (%s listener)" % verdict, code=verdict)
+    verdict = token_verdict(base, uid_lookup)
+    if verdict == "no-listener":
+        return Reply(error="nothing is listening", code="no-listener")
+    if verdict != "send":
+        return Reply(error="request withheld (%s listener)" % verdict, code=verdict)
     request = urllib.request.Request(base + path, method=method)
     request.add_header("Accept", "application/json")
     data = None
@@ -350,7 +351,7 @@ class Api:
         self.uid_lookup = uid_lookup
         self.auth_required = False
         self.last_error = ""
-        # "untrusted" or "insecure" once the token was withheld from this base.
+        # "untrusted" or "insecure" once requests were withheld from this base.
         self.untrusted = ""
 
     def get(self, path: str):
@@ -371,12 +372,12 @@ class Api:
 
 
 def untrusted_problem(base: str, why: str) -> str:
-    """A plain sentence for a base the token was withheld from. No server text."""
+    """A plain sentence for a base requests were withheld from. No server text."""
     where = urllib.parse.urlsplit(base).netloc or "that address"
     if why == "insecure":
-        return ("The token is never sent over plain http to %s. Use an https address "
+        return ("Nothing is sent over plain http to %s. Use an https address "
                 "or a loopback one." % where)
-    return ("Another user's program is listening at %s, so the token was not sent. "
+    return ("Another user's program is listening at %s, so nothing was sent. "
             "Stop it, or run Paperclip as your own user." % where)
 
 
