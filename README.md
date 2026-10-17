@@ -46,9 +46,15 @@ step. After a change to `dev/follow-develop` itself, run
 line per plugin per pass in `~/.local/state/sceny-plugins/follow-develop.jsonl`,
 also in `journalctl --user -u sceny-plugins-follow-develop`.
 
-- It only moves a checkout that is clean and on `develop`. A feature branch,
-  local changes, a symlink (`sceny.diction`) or a non-git copy is left alone and
-  logged as `skipped`. Other plugins are not in its list (`FOLLOW_PLUGINS`).
+- It only moves a checkout that is clean and on the branch it follows. A
+  feature branch, local changes, a symlink (`sceny.diction`) or a non-git copy
+  is left alone and logged as `skipped`. Other plugins are not in its list
+  (`FOLLOW_PLUGINS`).
+- An entry in `FOLLOW_PLUGINS` is `id` or `id:branch`. A plain id follows
+  `FOLLOW_BRANCH` (`develop`); `id:branch` follows that branch. A repo with no
+  `develop` is named with its branch: `jca.gha-runners:master` keeps the runner
+  panel on `master` of `sceny/omarchy-gha-runners`, so no one runs
+  `omarchy plugin update` for it.
 - **Never leave an install on a feature branch for a live check.** The timer
   skips it, so it silently stops following. Use `dev/rig`.
 - A pass that cannot fast-forward or fails validation exits non-zero, so
