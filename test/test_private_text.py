@@ -9,6 +9,11 @@ C1  Private text on a command line. `/proc/<pid>/cmdline` is readable by every
     element must be on ALLOWED below, with the reason it is not private text. A
     new expression fails the build until a reviewer reads it and adds it.
 
+    A function whose parameter is one of those allowed bare names is trusted at
+    its use, so every call of it is read too: each value it is given is a
+    literal, an expression allowed in the caller's file, or listed in ASSIGNED
+    under (caller's file, parameter, expression).
+
 C2  The clipboard read without a paste by the user. Qt reads the clipboard in
     QQuickTextInput, so no `*.qml` may use a type built on it, and nothing may
     reach the clipboard by another path. A future text field follows the
@@ -415,6 +420,11 @@ ASSIGNED = {
     ("Service.qml", "inboxFilter", "Model.normalizeInboxFilter(setting(\"inboxFilter\", Model.INBOX_NEEDS_ME))"): "a plugin enum (needs-me / all), normalised by Model.normalizeInboxFilter",
     ("Service.qml", "clean", "String(value).replace(/[^A-Za-z0-9._-]/g, \"\")"): "setSetting() strips it to [A-Za-z0-9._-]",
     ("Service.qml", "company", "_retryCompanies[0]"): "a company id, taken from the rows' companyId (retryAll)",
+    # What callers pass a function whose parameter is an allowed name.
+    ("Panel.qml", "action", "action.id"): "a verb from Model.js: open, url, setup, doctor, start, webapp",
+    ("Panel.qml", "action", "root.action.id"): "a verb from Model.js: open, url, setup, doctor, start, webapp",
+    ("Panel.qml", "url", "row.url"): "a page path or url the server built, opened only on the instance's own origin",
+    ("Panel.qml", "url", "rowItem.row.url"): "a page path or url the server built, opened only on the instance's own origin",
 }
 
 BARE = re.compile(r"[A-Za-z_]\w*")
@@ -470,13 +480,13 @@ def in_string(s, pos):
 
 
 def functions(code):
-    """(start, end, name, parameters) of every function, nested ones too."""
+    """(start, end, name, parameters, keyword index) of every function, nested ones too."""
     out = []
     for m in re.finditer(r"\bfunction\b\s*(\w*)\s*\(", code):
         close = closing(code, m.end() - 1)
         params = [re.split(r"[\s:=]", p.strip(), maxsplit=1)[0] for p in split_top(code[m.end():close], ",") if p.strip()]
         body = code.find("{", close)
-        out.append((body + 1, closing(code, body), m.group(1), params))
+        out.append((body + 1, closing(code, body), m.group(1), params, m.start()))
     return out
 
 
@@ -520,7 +530,9 @@ def laundered(name, src, allowed=None, assigned=None, sources=None, used=None):
             for cfile, cline, args in call_sites(fn[2], sources):
                 if at >= len(args):
                     continue
-                for arg in value_parts(args[at]):
+                given = args[at].strip()
+                elements = split_top(given[1:-1], ",") if given.startswith("[") and given.endswith("]") else [given]
+                for arg in [part for element in elements if element.strip() for part in value_parts(element)]:
                     if (cfile, part, arg) in assigned and used is not None:
                         used.add((cfile, part, arg))
                     if not (is_literal(arg) or (cfile, part, arg) in assigned):
@@ -532,6 +544,55 @@ def laundered(name, src, allowed=None, assigned=None, sources=None, used=None):
         for index, expr in assignments(code, var):
             for part in value_parts(expr):
                 judge(var, index, part, code.count("\n", 0, index) + 1)
+    return sorted(set(out))
+
+
+def allowed_in(allowed, name):
+    """Every expression allowed on some command line of a file."""
+    return {e for (f, e) in allowed if f == name}
+
+
+def parameters_given(name, src, allowed=None, assigned=None, sources=None, used=None):
+    """A parameter that is an allowed bare name and reaches a command line is
+    trusted at its use, so what every caller passes it is read: a literal, an
+    expression allowed in the caller's file, or an expression in ASSIGNED under
+    (caller's file, parameter, expression)."""
+    allowed = ALLOWED if allowed is None else allowed
+    assigned = ASSIGNED if assigned is None else assigned
+    sources = {name: src} if sources is None else sources
+    code = strip_comments(src)
+    names = {e for (f, e) in allowed if f == name and BARE.fullmatch(e) and e != "argv"}
+    lines = [(line, set(leaves(expr))) for line, expr in sites(src)]
+    out = []
+    for start, end, fname, params, at_keyword in functions(code):
+        first, last = code.count("\n", 0, start) + 1, code.count("\n", 0, end) + 1
+        for param in params:
+            if param not in names or not any(first <= line <= last and param in leaf for line, leaf in lines):
+                continue
+            if not fname:
+                source = re.search(r"([\w.]+)\.(?:forEach|map|filter|some|every)\(\s*$", code[:at_keyword])
+                if source and (name, param, source.group(1)) in assigned:
+                    if used is not None:
+                        used.add((name, param, source.group(1)))
+                elif source:
+                    out.append("%s:%d  %s is given the items of %s" % (name, first, param, source.group(1)))
+                else:
+                    out.append("%s:%d  %s is a parameter of a function with no name and reaches a command line" % (name, first, param))
+                continue
+            at = params.index(param)
+            for cfile, cline, args in call_sites(fname, sources):
+                if at >= len(args):
+                    continue
+                given = args[at].strip()
+                elements = split_top(given[1:-1], ",") if given.startswith("[") and given.endswith("]") else [given]
+                for arg in [part for element in elements if element.strip() for part in value_parts(element)]:
+                    if (cfile, param, arg) in assigned:
+                        if used is not None:
+                            used.add((cfile, param, arg))
+                        continue
+                    if is_literal(arg) or arg in allowed_in(allowed, cfile):
+                        continue
+                    out.append("%s:%d  %s() is given %s for %s, which reaches a command line" % (cfile, cline, fname, arg, param))
     return sorted(set(out))
 
 
@@ -650,6 +711,7 @@ class C1NoPrivateTextOnArgv(unittest.TestCase):
         used = set()
         for n in sources:
             laundered(n, sources[n], sources=sources, used=used)
+            parameters_given(n, sources[n], sources=sources, used=used)
         self.assertEqual(sorted(set(ASSIGNED) - used), [], "the assignment is gone; delete it from ASSIGNED")
         for key, why in ASSIGNED.items():
             self.assertTrue(why.strip(), "no reason for %s" % (key,))
@@ -679,6 +741,39 @@ class C1NoPrivateTextOnArgv(unittest.TestCase):
         for label, src in fine.items():
             self.assertEqual(laundered("p.qml", src, allowed, {}), [], label)
         self.assertEqual(laundered("p.qml", cases["verb"], allowed, {("p.qml", "verb", "item.title"): "a made-up reviewed value"}), [])
+
+    def test_a_parameter_that_is_an_allowed_name_is_given_only_what_was_read(self):
+        sources = {n: read(n) for n in qml_files()}
+        bad = [v for n in sources for v in parameters_given(n, sources[n], sources=sources)]
+        self.assertEqual(bad, [], "a function whose parameter is an allowed name is given a value nobody reviewed: "
+                         "add it to ASSIGNED with the reason it is not text from the instance, or do not pass it")
+        allowed = {("p.qml", n): "x y z" for n in ("verb", "url", "args")}
+        define = 'function f(url) { Util.execArgv(["x", url]) }\n'
+        cases = {
+            "a field of an item": define + "function g(item) { f(item.title) }",
+            "an element of an array": 'function h(args) { Util.execArgv(["x"].concat(args)) }\nfunction g(item) { h(["a", item.body]) }',
+            "items of a list": "function g(list) { list.forEach(function(url) { Util.execArgv([\"x\", url]) }) }",
+            "a function with no name": "function g(item) { setTimeout(function(url) { Util.execArgv([\"x\", url]) }, 1) }",
+        }
+        for label, src in cases.items():
+            self.assertTrue(parameters_given("p.qml", src, allowed, {}), label)
+        fine = {
+            "a literal": define + 'function g() { f("open") }',
+            "an allowed name": define + "function g() { f(verb) }",
+            "an array of literals and allowed names": 'function h(args) { Util.execArgv(["x"].concat(args)) }\nfunction g() { h(["a", verb]) }',
+        }
+        for label, src in fine.items():
+            self.assertEqual(parameters_given("p.qml", src, allowed, {}), [], label)
+        self.assertEqual(parameters_given("p.qml", cases["a field of an item"], allowed,
+                                          {("p.qml", "url", "item.title"): "a made-up reviewed value"}), [])
+
+    def test_a_planted_call_of_an_allowed_parameter_in_the_real_files_fails(self):
+        sources = {n: read(n) for n in qml_files()}
+        self.assertEqual(parameters_given("Service.qml", sources["Service.qml"], sources=sources), [])
+        line = "function planted(item) { service.openUrl(item.title) }"
+        sources["Panel.qml"] = sources["Panel.qml"] + "\n" + line
+        found = parameters_given("Service.qml", sources["Service.qml"], sources=sources)
+        self.assertTrue(any("openUrl() is given item.title" in v for v in found), found)
 
     def test_a_planted_case_in_the_real_service_fails(self):
         real = read("Service.qml")
