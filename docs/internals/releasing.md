@@ -179,8 +179,12 @@ never certifies their own change. The promises behind the list are in
    the QML starts (`Util.execArgv`, `command:`, `.command =`). Every argv element
    that is not a string literal is on a reviewed allowlist in the test, with the
    reason it is not private text; a new one fails until a reviewer adds it. The
-   notification text goes to `bin/omarchy-paperclip-notify` on stdin.
-   Check: [`test/test_private_text.py`](../../test/test_private_text.py).
+   notification text goes to `bin/omarchy-paperclip-notify` on stdin. A function
+   whose parameter is an allowed bare name has every call of it read the same way.
+   No script in `bin/`, `lib/` or `dev/` builds a shell string (`shell=True`,
+   `os.system`, `bash -c`, `sh -c`) unless the line is on the allowlist with a reason.
+   Check: [`test/test_private_text.py`](../../test/test_private_text.py),
+   [`test/test_shell_argv.py`](../../test/test_shell_argv.py).
 8. **Nothing reads the clipboard without a paste by the user.**
    No `*.qml` uses `TextInput`, `TextField`, `TextArea`, or an Omarchy `qs.Ui`
    component built on one (`NumberField`, `MultiSelect`, `SearchableDropdown`):
