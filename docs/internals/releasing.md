@@ -37,7 +37,7 @@ this template. `X.Y.Z` is the version.
 | R0 | the release (holds the status page) | the plugin manager | R1 to R7 | the freeze check is clean, the release is published, the marketplace issue is filed or not needed, both trackers are closed |
 | R1 | prepare: `dev/release-prepare X.Y.Z` (version, CHANGELOG section, branch); for urgent, the fix itself is on this pull request | Panel Engineer | | the head has the version and its CHANGELOG section (`dev/release-notes` prints it); `test` is green on the first push |
 | R2 | review with security check (the regular pull-request review) | Panel QA | R1 | PASS on the candidate SHA; for minor and patch, merged into `develop` |
-| R3 | regression in the rig, cold install, upgrade from the live tag, marketplace check by hand | Plugin DevOps runs, Panel QA gives the verdict | R2 | the regression record is PASS on the candidate SHA, with the *needs the owner's setup* list; the marketplace check passed on the candidate |
+| R3 | regression in the rig, cold install, upgrade from the live tag, marketplace check by hand | Plugin DevOps runs, Panel QA gives the verdict | R2 | the regression record is PASS on the candidate SHA, with the *needs the owner's setup* list, which holds every open `needs-owner-setup` issue; the marketplace check passed on the candidate |
 | R4 | release security review: the whole plugin, plus `last-tag..candidate` | the Plugin Security Reviewer | R2 | PASS on the candidate SHA; a FAIL rejects the candidate |
 | R5 | the owner's machine on the candidate | Plugin DevOps | R3, R4 | the owner's folder is at the SHA and the shell is restarted after (*The owner's request*) |
 | R6 | the owner's go: the status page and nothing else | the chief of staff carries it to the owner | R5 | the owner said go or no for that SHA |
@@ -92,6 +92,7 @@ passed. It holds nothing private beyond what the tasks already hold.
 
 ## Needs the owner's setup (for the owner)
 - <item>, or *none*
+- <every open issue labelled `needs-owner-setup`: one line with its link>, or *none*
 
 ## Outside findings this release answers
 - <finding, link>, then <fix pull request>, then <its class test or lint>
@@ -258,6 +259,15 @@ web app window in their browser.
 
 | What | Why the rig cannot | What the owner does | Result |
 |---|---|---|---|
+
+The list also holds every open issue with the label `needs-owner-setup`
+(`gh issue list --label needs-owner-setup --state open`), one row each with
+its link. That label marks a check that only a real Omarchy session can run;
+put it on the issue when you file one. The row comes from the issue, not from
+the regression, so a fix verified only headless does not reach `main` without
+its real-session check asked for. After the owner's go, each such issue is
+closed with the result commented, or stays open, for the next list, if it was
+not run.
 
 The plugin manager sends the list to the owner as one request (*The owner's
 request*) that says exactly what to do and why. An item stays open until the
