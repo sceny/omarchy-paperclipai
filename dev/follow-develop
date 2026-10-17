@@ -22,10 +22,13 @@
 # on the next run, so a lock delays the restart and never loses it.
 #
 # Reusable: it takes plugin ids, not repos. Another Sceny plugin needs only its
-# id added to FOLLOW_PLUGINS below (or in the environment).
+# id added to FOLLOW_PLUGINS below (or in the environment). An entry is `id` or
+# `id:branch`: a plain id follows FOLLOW_BRANCH, `id:branch` follows that branch.
+# A repo with no `develop` (jca.gha-runners has only `master`) is named with its
+# branch, so the timer keeps it current and nobody runs `omarchy plugin update`.
 #
 # Blast radius: it only touches the checkouts named in FOLLOW_PLUGINS, and only
-# when they are clean and on `develop`. A feature branch, local changes, a
+# when they are clean and on the branch they follow. A feature branch, local changes, a
 # symlink or a non-git copy are left alone and logged. Never leave an install
 # on a feature branch for a live check; use dev/rig.
 #
@@ -33,7 +36,7 @@
 
 set -uo pipefail
 
-FOLLOW_PLUGINS=${FOLLOW_PLUGINS:-"sceny.devices sceny.paperclipai"}
+FOLLOW_PLUGINS=${FOLLOW_PLUGINS:-"sceny.devices sceny.paperclipai jca.gha-runners:master"}
 FOLLOW_BRANCH=${FOLLOW_BRANCH:-develop}
 PLUGINS_DIR=${FOLLOW_PLUGINS_DIR:-$HOME/.config/omarchy/plugins}
 STATE_DIR=${FOLLOW_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/sceny-plugins}
@@ -62,14 +65,16 @@ log() {
 }
 
 follow_one() {
-  local id=$1 dir=$PLUGINS_DIR/$1 branch old new
+  local id=${1%%:*} follow=$FOLLOW_BRANCH dir branch old new
+  [[ $1 == *:* ]] && follow=${1#*:}
+  dir=$PLUGINS_DIR/$id
   if [[ -L $dir ]]; then log "$id" skipped "symlink to a working copy; left alone"; return 0; fi
   if [[ ! -d $dir ]]; then log "$id" skipped "not installed"; return 0; fi
   if [[ ! -d $dir/.git ]]; then log "$id" skipped "not a git checkout"; return 0; fi
 
   branch=$(git -C "$dir" symbolic-ref --quiet --short HEAD || true)
-  if [[ $branch != "$FOLLOW_BRANCH" ]]; then
-    log "$id" skipped "on '${branch:-detached HEAD}', not $FOLLOW_BRANCH"
+  if [[ $branch != "$follow" ]]; then
+    log "$id" skipped "on '${branch:-detached HEAD}', not $follow"
     return 0
   fi
   if [[ -n $(git -C "$dir" status --porcelain --untracked-files=no) ]]; then
@@ -77,8 +82,8 @@ follow_one() {
     return 0
   fi
 
-  if ! git -C "$dir" fetch --quiet origin "$FOLLOW_BRANCH"; then
-    log "$id" failed "fetch of origin/$FOLLOW_BRANCH failed"
+  if ! git -C "$dir" fetch --quiet origin "$follow"; then
+    log "$id" failed "fetch of origin/$follow failed"
     return 1
   fi
   old=$(git -C "$dir" rev-parse HEAD)
@@ -88,12 +93,12 @@ follow_one() {
     return 0
   fi
   if ! git -C "$dir" merge --ff-only --quiet FETCH_HEAD >/dev/null 2>&1; then
-    log "$id" failed "cannot fast-forward to origin/$FOLLOW_BRANCH" "$old" "$new"
+    log "$id" failed "cannot fast-forward to origin/$follow" "$old" "$new"
     return 1
   fi
   if ! $VALIDATE_CMD "$dir" >/dev/null 2>&1; then
     git -C "$dir" reset --hard --quiet "$old"
-    log "$id" rolled-back "origin/$FOLLOW_BRANCH failed plugin validation" "$old" "$new"
+    log "$id" rolled-back "origin/$follow failed plugin validation" "$old" "$new"
     return 1
   fi
   log "$id" updated "" "$old" "$new"

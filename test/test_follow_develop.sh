@@ -8,7 +8,7 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export FOLLOW_PLUGINS_DIR=$T/plugins FOLLOW_STATE_DIR=$T/state
-export FOLLOW_PLUGINS="p.one p.two p.three p.link p.plain"
+export FOLLOW_PLUGINS="p.one p.two p.three p.link p.plain p.four:master"
 export FOLLOW_PING_CMD="true" FOLLOW_PING_RETRY_SEC=0
 export FOLLOW_RESTART_CMD="$T/restart"
 printf '#!/bin/bash\n[[ ! -e "%s/notready" ]] || { echo "Omarchy shell did not become ready after restart." >&2; exit 1; }\n[[ ! -e "%s/locked" ]] || { echo "Refusing to restart Omarchy shell while the session is locked." >&2; exit 1; }\n[[ ! -e /proc/self/fd/9 ]] || touch "%s/leaked"\ntouch "%s/restarted"\n' "$T" "$T" "$T" "$T" >"$T/restart"; chmod +x "$T/restart"
@@ -26,9 +26,14 @@ for p in p.one p.two p.three; do
     && git push -q origin main && git switch -q -c develop && git push -q origin develop )
   git clone -q -b develop "$T/$p.git" "$FOLLOW_PLUGINS_DIR/$p"
 done
+# p.four has only a master branch and is named with its branch: id:branch.
+git init -q --bare -b master "$T/p.four.git"
+git clone -q "$T/p.four.git" "$T/work/p.four" 2>/dev/null
+( cd "$T/work/p.four" && git switch -q -c master && touch ok && git add ok && git commit -qm init && git push -q origin master )
+git clone -q -b master "$T/p.four.git" "$FOLLOW_PLUGINS_DIR/p.four"
 mkdir "$T/target" "$FOLLOW_PLUGINS_DIR/p.plain"; ln -s "$T/target" "$FOLLOW_PLUGINS_DIR/p.link"
 
-push_change() { ( cd "$T/work/$1" && git switch -q develop && echo "$2" >f && git add f && git commit -qm "$2" && git push -q origin develop ); }
+push_change() { ( cd "$T/work/$1" && git switch -q "${3:-develop}" && echo "$2" >f && git add f && git commit -qm "$2" && git push -q origin "${3:-develop}" ); }
 
 run
 check "up to date: rc 0, no restart" '[[ $(cat $T/rc) == 0 && ! -e $T/restarted ]]'
@@ -56,6 +61,21 @@ check "unlocked, nothing changed: the kept restart runs once" '[[ -e $T/restarte
 rm -f "$T/restarted"
 run
 check "then nothing changed: no restart" '[[ ! -e $T/restarted ]]'
+
+# id:branch follows that branch, not FOLLOW_BRANCH; a plain id still follows FOLLOW_BRANCH.
+push_change p.four m1 master
+run
+check "id:branch follows its own branch (master), not develop" '[[ $(git -C $FOLLOW_PLUGINS_DIR/p.four rev-parse HEAD) == $(git -C $T/p.four.git rev-parse master) && $(cat $T/rc) == 0 ]] && jq -e "select(.plugin==\"p.four\" and .result==\"updated\")" $FOLLOW_STATE_DIR/follow-develop.jsonl >/dev/null'
+check "the id:branch update restarts the shell once" '[[ -e $T/restarted && ! -e $FOLLOW_STATE_DIR/restart-pending ]]'
+rm -f "$T/restarted"
+git -C "$FOLLOW_PLUGINS_DIR/p.four" switch -q -c feature
+push_change p.four m2 master
+run
+check "id:branch checkout on another branch is left alone, naming its branch" '[[ $(git -C $FOLLOW_PLUGINS_DIR/p.four symbolic-ref --short HEAD) == feature ]] && grep -q "not master" $T/out'
+git -C "$FOLLOW_PLUGINS_DIR/p.four" switch -q master
+run
+check "back on master: it catches up" '[[ $(git -C $FOLLOW_PLUGINS_DIR/p.four rev-parse HEAD) == $(git -C $T/p.four.git rev-parse master) ]]'
+rm -f "$T/restarted"
 
 # The restart script gives up after 2 seconds; a shell that answers a little
 # later was restarted. One that never answers is deferred, and the next pass
