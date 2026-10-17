@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""The company's rules for public text, checked by a script.
+
+A pull request's public text is its body, every comment, every review and every
+review comment. Three checks read it, with their patterns in
+dev/public-text-rules.json:
+
+  public-text-environment  names how or where we worked (tools, paths, test counts)
+  open-item-no-owner       says something is left, with no issue reference
+  unlinked-reference       names another repository's issue without its owner
+
+  dev/public-text-check --pr 123 [--repo owner/name]   read the pull request (GITHUB_TOKEN)
+  dev/public-text-check                                inside Actions: the event's pull request
+  dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
+  dev/public-text-check --standing                     the same rules on the standing texts
+
+A failure names the text's URL, the check and the matched words, never the whole
+text. Exit 0 when nothing fails, 1 when something does, 2 when it cannot read.
+"""
+
+import argparse
+import fnmatch
+import glob
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+RULES_FILE = os.path.join(HERE, "public-text-rules.json")
+MAX_SHOWN = 60
+
+FENCE = re.compile(r"^\s*(```|~~~)")
+URL = re.compile(r"https?://\S+")
+INLINE_CODE = re.compile(r"`[^`\n]*`")
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+")
+HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+
+def load_rules(path=RULES_FILE):
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def shown(text):
+    """A match as the failure prints it: one short line with no control characters."""
+    text = re.sub(r"[^\x20-\x7e]", " ", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text if len(text) <= MAX_SHOWN else text[: MAX_SHOWN - 3] + "..."
+
+
+def blank_fences(text):
+    """The text with fenced code blocks and HTML comments emptied, line for line."""
+    text = HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    out, fenced = [], False
+    for line in text.split("\n"):
+        if FENCE.match(line):
+            fenced = not fenced
+            out.append("")
+        else:
+            out.append("" if fenced else line)
+    return out
+
+
+def changes_any(changed_files, globs):
+    return any(fnmatch.fnmatch(f, g) for g in globs for f in changed_files)
+
+
+SENTENCE_BREAK = re.compile(r"(?<=[.!?;:])\s+|\s[\u2014\u2013-]\s")
+
+
+def sentence_of(line, start, end):
+    """The sentence of the line that holds the span: between the breaks (a full
+    stop, ; : ! ? or a dash) before and after it."""
+    lo, hi = 0, len(line)
+    for m in SENTENCE_BREAK.finditer(line):
+        if m.end() <= start:
+            lo = m.end()
+        elif m.start() >= end:
+            hi = m.start()
+            break
+    return line[lo:hi]
+
+
+def find_all(patterns, text, changed_files=(), quoting_files=()):
+    """(rule id, matched text) for every pattern match in the text's lines, after
+    the exceptions of the pattern: words in the sentence of the match
+    (unless_sentence), the words just before it (unless_before), its own matched
+    text (unless_match) and the files the pull request changes
+    (allowed_when_changed: a pull request about a tool may name it; a pattern
+    marked `quoted` is also allowed by `quoting_files`, the files that hold the
+    rules and quote their words)."""
+    found = []
+    lines = [URL.sub(" ", line) for line in blank_fences(text)]
+    for pat in patterns:
+        if changes_any(changed_files, pat.get("allowed_when_changed", [])):
+            continue
+        if pat.get("quoted") and changes_any(changed_files, quoting_files):
+            continue
+        regex = re.compile(pat["regex"], re.I)
+        exceptions = {key: re.compile(pat[key], re.I) for key in ("unless_sentence", "unless_before", "unless_match") if key in pat}
+        for line in lines:
+            for m in regex.finditer(line):
+                if "unless_match" in exceptions and exceptions["unless_match"].search(m.group(0)):
+                    continue
+                if "unless_before" in exceptions and exceptions["unless_before"].search(line[: m.start()]):
+                    continue
+                if "unless_sentence" in exceptions and exceptions["unless_sentence"].search(sentence_of(line, m.start(), m.end())):
+                    continue
+                found.append((pat["id"], m.group(0)))
+    return found
+
+
+def blocks(text):
+    """Bullets and paragraphs of the text (fenced code and inline code removed):
+    [{"text", "bullet", "lead"}]. A bullet holds its continuation lines
+    and its nested bullets; a paragraph runs to the next blank line or bullet. `lead`
+    marks a block that introduces what follows (a heading, or a line ending in a colon)."""
+    out, current, indent = [], None, 0
+
+    def close():
+        nonlocal current
+        if current is not None:
+            current["lead"] = bool(current["bullet"] is False and (current["heading"] or current["text"].rstrip().rstrip("*_ ").endswith(":")))
+            out.append(current)
+            current = None
+
+    for raw in blank_fences(text):
+        line = INLINE_CODE.sub(" ", raw)
+        if not line.strip():
+            if current is not None and not current["bullet"]:
+                close()
+            elif current is not None:
+                current["gap"] = True
+            continue
+        bullet = BULLET.match(line)
+        if HEADING.match(line):
+            close()
+            current = {"text": line, "bullet": False, "heading": True}
+            close()
+        elif bullet:
+            if current is not None and current["bullet"] and len(bullet.group(1)) > indent:
+                current["text"] += "\n" + line
+                continue
+            close()
+            indent = len(bullet.group(1))
+            current = {"text": line, "bullet": True, "heading": False}
+        elif current is not None and current["bullet"] and (line.startswith(" ") or not current.get("gap")):
+            current["text"] += "\n" + line
+        else:
+            if current is not None and current["bullet"]:
+                close()
+            if current is None:
+                current = {"text": line, "bullet": False, "heading": False}
+            else:
+                current["text"] += "\n" + line
+    close()
+    return out
+
+
+def check_open_items(rules, text):
+    """(marker id, matched text) for each place something is left with no issue
+    reference in its bullet or paragraph. A heading, or a line ending in a colon, that
+    says something is left asks the same of the bullets (or the paragraph) under it."""
+    markers = [(m["id"], re.compile(m["regex"], re.I), re.compile(m["unless_line"], re.I) if "unless_line" in m else None)
+               for m in rules["markers"]]
+    reference = re.compile(rules["reference"])
+
+    def marker_in(block_text):
+        for line in URL.sub(" ", block_text).split("\n"):
+            for rule_id, regex, unless_line in markers:
+                m = regex.search(line)
+                if m and not (unless_line and unless_line.search(line)):
+                    return rule_id, m.group(0)
+        return None
+
+    def has_reference(block_text):
+        return bool(reference.search(block_text))
+
+    found = []
+    parts = blocks(text)
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        hit = marker_in(part["text"])
+        if hit and not has_reference(part["text"].replace("\n", " ")):
+            if part["lead"] and i + 1 < len(parts):
+                j = i + 1
+                if parts[j]["bullet"]:
+                    while j < len(parts) and parts[j]["bullet"]:
+                        if not has_reference(parts[j]["text"]):
+                            found.append(hit)
+                        j += 1
+                elif not has_reference(parts[j]["text"]):
+                    found.append(hit)
+                    j += 1
+                else:
+                    j += 1
+                i = j
+                continue
+            found.append(hit)
+        i += 1
+    return found
+
+
+def check_text(rules, text, changed_files=()):
+    """[(check, rule id, matched text)] for one public text."""
+    problems = []
+    env = rules["environment"]
+    for rule_id, matched in find_all(env["patterns"], text, changed_files, env.get("quoted_when_changed", [])):
+        problems.append((rules["environment"]["check"], rule_id, matched))
+    for rule_id, matched in check_open_items(rules["open_item"], text):
+        problems.append((rules["open_item"]["check"], rule_id, matched))
+    unlinked = []
+    for pat in rules["unlinked_reference"]["patterns"]:
+        lines = [INLINE_CODE.sub(" ", line) for line in blank_fences(text)]
+        unlinked += find_all([pat], "\n".join(lines), changed_files)
+    for rule_id, matched in unlinked:
+        problems.append((rules["unlinked_reference"]["check"], rule_id, matched))
+    return problems
+
+
+def check_pull_request(rules, doc):
+    """Every problem in a pull request's public text: [(url, check, rule id, matched)]."""
+    files = doc.get("changed_files", [])
+    problems = []
+    for item in doc["texts"]:
+        for check, rule_id, matched in check_text(rules, item.get("body") or "", files):
+            problems.append((item["url"], check, rule_id, matched))
+    return problems
+
+
+def check_standing(rules, root=ROOT):
+    """[(path:line, check, rule id, matched)] for the standing texts: they say what is,
+    with no task numbers, dates or the owner's words as history."""
+    section = rules["standing"]
+    problems = []
+    for pattern in section["files"]:
+        for path in sorted(glob.glob(os.path.join(root, pattern), recursive=True)):
+            with open(path) as handle:
+                lines = handle.read().split("\n")
+            fenced = False
+            for number, line in enumerate(lines, 1):
+                if FENCE.match(line):
+                    fenced = not fenced
+                    continue
+                if fenced:
+                    continue
+                for rule_id, matched in find_all(section["patterns"], line):
+                    where = "%s:%d" % (os.path.relpath(path, root), number)
+                    problems.append((where, section["check"], rule_id, matched))
+    return problems
+
+
+def api(path, token):
+    """Every page of a GitHub API list, or the object itself."""
+    results, url = [], "https://api.github.com" + path
+    while url:
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token,
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.load(response)
+            link = response.headers.get("Link", "")
+        if not isinstance(data, list):
+            return data
+        results += data
+        nxt = re.search(r'<([^>]+)>;\s*rel="next"', link)
+        url = nxt.group(1) if nxt else None
+    return results
+
+
+def read_pull_request(repo, number, token):
+    base = "/repos/%s" % repo
+    pr = api("%s/pulls/%d" % (base, number), token)
+    texts = [{"url": pr["html_url"], "body": pr.get("body")}]
+    for kind in ("issues/%d/comments", "pulls/%d/reviews", "pulls/%d/comments"):
+        for item in api("%s/%s?per_page=100" % (base, kind % number), token):
+            texts.append({"url": item["html_url"], "body": item.get("body")})
+    files = [f["filename"] for f in api("%s/pulls/%d/files?per_page=100" % (base, number), token)]
+    return {"changed_files": files, "texts": texts}
+
+
+def event_pull_request():
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return None
+    with open(path) as handle:
+        event = json.load(handle)
+    return (event.get("pull_request") or {}).get("number")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Public text of a pull request against the company's rules.")
+    parser.add_argument("--pr", type=int)
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", "sceny/omarchy-paperclipai"))
+    parser.add_argument("--fixture")
+    parser.add_argument("--standing", action="store_true")
+    parser.add_argument("--rules", default=RULES_FILE)
+    args = parser.parse_args(argv)
+    rules = load_rules(args.rules)
+
+    if args.standing:
+        problems = check_standing(rules)
+        what = "standing texts"
+    else:
+        if args.fixture:
+            with open(args.fixture) as handle:
+                doc = json.load(handle)
+        else:
+            number = args.pr or event_pull_request()
+            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+            if not number or not token:
+                print("public-text-check: give --pr (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
+                return 2
+            try:
+                doc = read_pull_request(args.repo, number, token)
+            except (urllib.error.URLError, KeyError, ValueError) as error:
+                print("public-text-check: could not read the pull request: %s" % type(error).__name__, file=sys.stderr)
+                return 2
+        problems = check_pull_request(rules, doc)
+        what = "public text"
+
+    for where, check, rule_id, matched in problems:
+        print("FAIL %s [%s] %s: %s" % (check, rule_id, where, shown(matched)))
+    if problems:
+        print("\n%d problem(s) in the %s. Edit the text; the check runs again on the edit." % (len(problems), what))
+        return 1
+    print("public-text-check: the %s passes" % what)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

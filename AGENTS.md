@@ -66,6 +66,13 @@ dev/rig selftest       # the rig's own lease and reap logic; no compositor
 dev/rig ...            # the plugin end to end, in its own Hyprland (see README)
 ```
 
+The `public-text` check runs on every pull request (a required status check on
+`develop`): the body, comments, reviews and review comments name no setup of
+ours, leave nothing open without an issue and name no other repository's issue
+without its owner. Write them so (`docs/internals/releasing.md`, *Public text
+of a pull request*); `dev/public-text-check --pr N` (with `GITHUB_TOKEN`)
+reads a pull request's text against the rules.
+
 ## Releasing
 
 Releasing a version to Omarchy is always the owner's call. The steps below run
@@ -100,7 +107,8 @@ in order; the detail, the checklist and the record templates are in
   (Panel QA, one reviewer): the list in `docs/internals/releasing.md`, *Every
   pull request*. A finding blocks the pull request.
 - **A release closes with** a full regression in the rig (a regression
-  record; what the rig cannot judge goes on a *needs the owner's setup* list),
+  record; what the rig cannot judge, and every open `needs-owner-setup`
+  issue, goes on a *needs the owner's setup* list),
   a cold install and an upgrade from the live tag, the marketplace check by
   hand on the candidate, and the Plugin Security Reviewer's review: the whole
   plugin against its threat model plus `last-tag..candidate`, every release. A

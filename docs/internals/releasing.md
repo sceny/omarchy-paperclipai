@@ -37,7 +37,7 @@ this template. `X.Y.Z` is the version.
 | R0 | the release (holds the status page) | the plugin manager | R1 to R7 | the freeze check is clean, the release is published, the marketplace issue is filed or not needed, both trackers are closed |
 | R1 | prepare: `dev/release-prepare X.Y.Z` (version, CHANGELOG section, branch); for urgent, the fix itself is on this pull request | Panel Engineer | | the head has the version and its CHANGELOG section (`dev/release-notes` prints it); `test` is green on the first push |
 | R2 | review with security check (the regular pull-request review) | Panel QA | R1 | PASS on the candidate SHA; for minor and patch, merged into `develop` |
-| R3 | regression in the rig, cold install, upgrade from the live tag, marketplace check by hand | Plugin DevOps runs, Panel QA gives the verdict | R2 | the regression record is PASS on the candidate SHA, with the *needs the owner's setup* list; the marketplace check passed on the candidate |
+| R3 | regression in the rig, cold install, upgrade from the live tag, marketplace check by hand | Plugin DevOps runs, Panel QA gives the verdict | R2 | the regression record is PASS on the candidate SHA, with the *needs the owner's setup* list, which holds every open `needs-owner-setup` issue; the marketplace check passed on the candidate |
 | R4 | release security review: the whole plugin, plus `last-tag..candidate` | the Plugin Security Reviewer | R2 | PASS on the candidate SHA; a FAIL rejects the candidate |
 | R5 | the owner's machine on the candidate | Plugin DevOps | R3, R4 | the owner's folder is at the SHA and the shell is restarted after (*The owner's request*) |
 | R6 | the owner's go: the status page and nothing else | the chief of staff carries it to the owner | R5 | the owner said go or no for that SHA |
@@ -92,6 +92,7 @@ passed. It holds nothing private beyond what the tasks already hold.
 
 ## Needs the owner's setup (for the owner)
 - <item>, or *none*
+- <every open issue labelled `needs-owner-setup`: one line with its link>, or *none*
 
 ## Outside findings this release answers
 - <finding, link>, then <fix pull request>, then <its class test or lint>
@@ -194,6 +195,33 @@ check that exists nor a `pending` mark, so the list and `test/` cannot drift
 apart.
 
 
+## Public text of a pull request
+
+`dev/public-text-check` holds the rules in `dev/public-text-rules.json` and
+fails the `public-text` check on a pull request whose body, comment, review or
+review comment: names the setup (`public-text-environment`: the tools, paths,
+test counts, task numbers); says something is left with no issue reference in
+its bullet or paragraph (`open-item-no-owner`); or names another repository's
+issue without its owner (`unlinked-reference`). The failure names the text's
+URL, the check and the matched words; the author or reviewer edits the text and
+the check runs again on the edit. Every run reads all the pull request's text
+through the API, so a plain comment is read on the next run of any event.
+
+- Paperclip is this plugin's product: only the words for the tracker that
+  runs our work (`Paperclip task`, `board`, `ticket`, `heartbeat`) fail.
+- A pull request about a tool may name it (`allowed_when_changed`); a pattern
+  that catches a product word gets an exception in the rules file and a case
+  in `test/test_public_text.py`, which holds a failing example of every class.
+- The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
+  task numbers, dates and the owner's words as history, in the unit tests
+  (`dev/public-text-check --standing`).
+- `public-text` is a required status check on `develop` (a repository ruleset,
+  no bypass). A direct push to `develop` is refused, so the `release` workflow
+  posts a `public-text` success status on the `main` commit it brings
+  `develop` level with (a push to `main` has no pull request text).
+- The checker and its rules are the same files as in `sceny/omarchy-devices`;
+  a change to a class goes to both repositories.
+
 ## Every pull request into `main`: the marketplace's checks
 
 The `marketplace-check` job runs the marketplace's own validation and
@@ -258,6 +286,15 @@ web app window in their browser.
 
 | What | Why the rig cannot | What the owner does | Result |
 |---|---|---|---|
+
+The list also holds every open issue with the label `needs-owner-setup`
+(`gh issue list --label needs-owner-setup --state open`), one row each with
+its link. That label marks a check that only a real Omarchy session can run;
+put it on the issue when you file one. The row comes from the issue, not from
+the regression, so a fix verified only headless does not reach `main` without
+its real-session check asked for. After the owner's go, each such issue is
+closed with the result commented, or stays open, for the next list, if it was
+not run.
 
 The plugin manager sends the list to the owner as one request (*The owner's
 request*) that says exactly what to do and why. An item stays open until the

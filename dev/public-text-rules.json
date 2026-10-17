@@ -1,0 +1,189 @@
+{
+  "environment": {
+    "check": "public-text-environment",
+    "patterns": [
+      {
+        "id": "sandbox-tool",
+        "regex": "\\bdev/(?:sandbox|rig)\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true
+      },
+      {
+        "id": "sandbox",
+        "regex": "\\bsandbox(?:es)?\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true,
+        "unless_sentence": "decod|bubblewrap|glycin|pixbuf|ffmpeg|\\b(?:no|without|around|outside|bypass\\w*)\\s+(?:the\\s+|a\\s+)?sandbox"
+      },
+      {
+        "id": "rig",
+        "regex": "\\brigs?\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true
+      },
+      {
+        "id": "emulator",
+        "regex": "\\bemulat(?:or|ors|ed)\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true
+      },
+      {
+        "id": "podman",
+        "regex": "\\bpodman\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true
+      },
+      {
+        "id": "container",
+        "regex": "\\b(?:in|inside|into|within|using|via|start(?:ed|s|ing)?|ran|run(?:s|ning)?|launch(?:ed|es|ing)?|spun|spin(?:s|ning)?|built|build(?:s|ing)?|creat(?:e|ed|es|ing)|boot(?:ed|s|ing)?)\\s+(?:\\w+\\s+){0,2}containers?\\b|\\b(?:new|fresh|throwaway|rootless|disposable|podman|docker|sandbox|separate|clean|another)\\s+containers?\\b|\\bcontainers?\\s+(?:image|runtime|runs?|starts?|started|stopped|exits?)\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
+        "quoted": true,
+        "unless_sentence": "\\bqml\\b|\\bitem\\b|layout|\\brow\\b|\\bcolumn\\b|flickable|rectangle|scroll|\\.qml"
+      },
+      {
+        "id": "paperclip",
+        "regex": "\\bpaperclip\\s+(?:task|board|ticket|heartbeat)s?\\b",
+        "quoted": true
+      },
+      {
+        "id": "task-id",
+        "regex": "\\bSCE-\\d+\\b",
+        "quoted": true
+      },
+      {
+        "id": "home-path",
+        "regex": "(?<![\\w])/home/[^\\s`)\\]]*",
+        "unless_match": "omarchy/paperclipai|sceny\\.paperclipai"
+      },
+      {
+        "id": "dot-path",
+        "regex": "(?<![\\w])~/\\.[^\\s`)\\]]*",
+        "unless_match": "omarchy/paperclipai|sceny\\.paperclipai"
+      },
+      {
+        "id": "tmp-path",
+        "regex": "(?<![\\w.])/tmp/[^\\s`)\\]]*"
+      },
+      {
+        "id": "runtime-dir",
+        "regex": "\\$\\{?XDG_RUNTIME_DIR\\}?[^\\s`)\\]]*",
+        "unless_match": "omarchy/paperclipai|sceny\\.paperclipai"
+      },
+      {
+        "id": "test-count-passed",
+        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:passed|passing)\\b|\\b(?:passed|passing)\\s+\\d+\\b|\\b\\d+\\s*/\\s*\\d+\\s+(?:tests?\\s+)?(?:passed|pass|green)\\b"
+      },
+      {
+        "id": "test-count",
+        "regex": "\\b\\d+\\)?\\s+(?:(?:unit|node|python|bridge|model)\\s+)?tests?\\b(?!/)|\\b(?:ran|run|runs|running)\\s+\\d+\\s+(?:unit\\s+)?tests?\\b|\\bOK \\(\\d+ tests?\\)",
+        "unless_before": "\\b(?:adds?|added|adding|introduc(?:es?|ed|ing)|includes?|including|writes?|wrote)\\s+(?:\\w+\\s+){0,3}$"
+      }
+    ],
+    "quoted_when_changed": [
+      "dev/public-text-check",
+      "dev/public-text-rules.json",
+      "test/test_public_text.py"
+    ]
+  },
+  "open_item": {
+    "check": "open-item-no-owner",
+    "markers": [
+      {
+        "id": "not-checked",
+        "regex": "\\bnot\\s+(?:yet\\s+|been\\s+)?(?:checked|tested|covered|verified|driven)\\b",
+        "unless_line": "not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
+      },
+      {
+        "id": "unchecked",
+        "regex": "\\b(?:unchecked|untested|unverified)\\b"
+      },
+      {
+        "id": "for-later",
+        "regex": "\\bfor\\s+later\\b"
+      },
+      {
+        "id": "follow-up",
+        "regex": "\\bfollow-?\\s?ups?\\b"
+      },
+      {
+        "id": "later",
+        "regex": "\\b(?:in|at|until|to|for)\\s+(?:a\\s+|the\\s+)?later\\b|\\blater\\s*(?:[.,;:)!?]|—|-\\s|$)|\\b(?:done|handled|fixed|checked|added|look(?:ed)?(?:\\s+at)?|decided?|do|dealt|revisit(?:ed)?|come\\s+back)\\s+(?:it\\s+|this\\s+)?later\\b"
+      },
+      {
+        "id": "todo",
+        "regex": "\\b(?:TODO|FIXME)\\b"
+      },
+      {
+        "id": "out-of-scope",
+        "regex": "\\bout\\s+of\\s+scope\\b"
+      }
+    ],
+    "reference": "(?:[\\w.-]+/[\\w.-]+)?#\\d+|https?://github\\.com/[\\w.-]+/[\\w.-]+/(?:issues|pull)/\\d+"
+  },
+  "unlinked_reference": {
+    "check": "unlinked-reference",
+    "patterns": [
+      {
+        "id": "repo-without-owner",
+        "regex": "(?<![\\w./-])[A-Za-z0-9][\\w.-]+#\\d+\\b"
+      },
+      {
+        "id": "named-upstream-bare-number",
+        "regex": "\\b(?:marketplace|upstream|omarchy|kde\\s?connect|kdeconnect|quickshell|hyprland)(?:'s)?\\s+(?:issue\\s+|pr\\s+|pull request\\s+)?#\\d+\\b"
+      }
+    ]
+  },
+  "standing": {
+    "check": "standing-text-history",
+    "files": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      ".claude/skills/**/*.md",
+      "docs/internals/**/*.md"
+    ],
+    "patterns": [
+      {
+        "id": "task-id",
+        "regex": "\\bSCE-\\d+\\b"
+      },
+      {
+        "id": "date-as-history",
+        "regex": "\\b20\\d\\d-\\d\\d-\\d\\d\\b"
+      },
+      {
+        "id": "owner-said",
+        "regex": "\\bthe owner(?:'s)? (?:said|decided|asked|decision|ask)\\b(?! (?:go|or no)\\b)"
+      }
+    ]
+  }
+}
