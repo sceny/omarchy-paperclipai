@@ -17,6 +17,10 @@ makes about that. Each one is checked on every pull request
 - The token is sent only to a loopback address whose listening socket belongs to
   your user, or over `https`. Never to plain `http` on another host, and never
   across a redirect: a 3xx answer is an error, and nothing is followed.
+- The same check guards every plain-`http` request, with a token or without
+  one. A program another user runs on Paperclip's port receives no request
+  (no read, no dismissal, no wake-up), and the panel says "Not your Paperclip"
+  instead of showing what it answered.
 - A response is read up to 4 MiB. More is an error.
 
 ## Text from the instance is data

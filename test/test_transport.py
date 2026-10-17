@@ -172,6 +172,36 @@ class Fetch(unittest.TestCase):
         finally:
             server.close()
 
+    def test_no_request_at_all_to_a_listener_that_is_not_ours_even_without_a_token(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"{}")))
+        try:
+            for method, body in (("GET", None), ("POST", {"id": "x"}), ("DELETE", None)):
+                reply = status.fetch(server.base, "", method, "/api/health", body,
+                                     uid_lookup=owned_by(OTHER))
+                self.assertEqual(reply.code, "untrusted", method)
+                self.assertEqual(reply.status, 0, method)
+            self.assertEqual(server.requests, [], "a request reached the foreign listener")
+        finally:
+            server.close()
+
+    def test_no_request_without_a_token_over_plain_http_to_another_host(self):
+        reply = status.fetch("http://192.0.2.1:3100", "", "GET", "/api/health",
+                             uid_lookup=owned_by(ME))
+        self.assertEqual(reply.code, "insecure")
+
+    def test_no_request_without_a_token_when_nobody_listens(self):
+        reply = status.fetch("http://127.0.0.1:9", "", "GET", "/api/health", uid_lookup=owned_by())
+        self.assertEqual(reply.code, "no-listener")
+
+    def test_without_a_token_our_own_listener_is_read_as_before(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"{}")))
+        try:
+            reply = status.fetch(server.base, "", "GET", "/api/health", uid_lookup=owned_by(ME))
+            self.assertEqual(reply.status, 200)
+            self.assertNotIn("Authorization", server.requests[0])
+        finally:
+            server.close()
+
     def test_the_token_reaches_our_own_listener(self):
         server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"{}")))
         try:
@@ -243,10 +273,12 @@ class Fetch(unittest.TestCase):
 
 
 class Probe(unittest.TestCase):
-    def run_probe(self, base, uid_lookup):
+    def run_probe(self, base, uid_lookup, token=TOKEN):
         original = status._proc_listener_uids
         saved = os.environ.get("PAPERCLIP_OMARCHY_TOKEN")
-        os.environ["PAPERCLIP_OMARCHY_TOKEN"] = TOKEN
+        os.environ["PAPERCLIP_OMARCHY_TOKEN"] = token
+        saved_state = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp()
         status._proc_listener_uids = uid_lookup
         out = io.StringIO()
         try:
@@ -254,6 +286,10 @@ class Probe(unittest.TestCase):
                 status.main(["--api-base", base, "--compact", "--instance", "no-such-instance-xyz"])
         finally:
             status._proc_listener_uids = original
+            if saved_state is None:
+                os.environ.pop("XDG_STATE_HOME", None)
+            else:
+                os.environ["XDG_STATE_HOME"] = saved_state
             if saved is None:
                 os.environ.pop("PAPERCLIP_OMARCHY_TOKEN", None)
             else:
@@ -267,7 +303,30 @@ class Probe(unittest.TestCase):
             self.assertEqual(report["state"], "untrusted-listener")
             self.assertFalse(report["reachable"])
             self.assertEqual(server.requests, [])
-            self.assertTrue(any("not sent" in line for line in report["problems"]), report["problems"])
+            self.assertTrue(any("nothing was sent" in line for line in report["problems"]), report["problems"])
+        finally:
+            server.close()
+
+    def test_a_foreign_listener_without_a_token_is_a_state_and_gets_nothing(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(),
+                                   h.wfile.write(b'{"status":"ok"}')))
+        try:
+            report = self.run_probe(server.base, owned_by(OTHER), token="")
+            self.assertEqual(report["state"], "untrusted-listener")
+            self.assertFalse(report["reachable"])
+            self.assertEqual(server.requests, [])
+            self.assertTrue(any("nothing was sent" in line for line in report["problems"]), report["problems"])
+        finally:
+            server.close()
+
+    def test_our_own_listener_without_a_token_is_reachable(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(),
+                                   h.wfile.write(b'{"status":"ok"}')))
+        try:
+            report = self.run_probe(server.base, owned_by(ME), token="")
+            self.assertTrue(report["reachable"])
+            self.assertNotEqual(report["state"], "untrusted-listener")
+            self.assertNotIn("Authorization", server.requests[0])
         finally:
             server.close()
 
