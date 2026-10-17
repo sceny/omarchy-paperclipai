@@ -182,9 +182,12 @@ rig_pc_assert_isolated() {
 
 # ------------------------------------------------------------------ seed ----
 #
-# One inbox row of each kind a panel check needs, in the throwaway instance:
-# failed_run, review, issue_thread_interaction, blocker_attention (and the
-# agent_error_alert a failed agent brings with it). Everything goes through the
+# A busy panel in the throwaway instance: RIG_SEED_WORKERS agents with a live
+# run each (the "working" card and the agent list) and at least
+# RIG_SEED_MIN_ROWS inbox rows (a two-digit bar bubble and a scrolling list),
+# with every kind a panel check needs: failed_run, review,
+# issue_thread_interaction, blocker_attention (and the agent_error_alert a
+# failed agent brings with it). Everything goes through the
 # instance's own API except one row: the inbox lists a failed run only after a
 # "Bounded retry exhausted" lifecycle event, which the server writes after
 # several scheduled retries, far longer than a check can wait. That event is
@@ -192,6 +195,15 @@ rig_pc_assert_isolated() {
 
 RIG_SEED_COMPANY="Rig Co"
 RIG_SEED_AGENT="Rig Runner"
+# Agents that run for as long as the rig lives, so the panel has live runs.
+RIG_SEED_WORKERS=(
+  "Rig Worker One|Rig: long-running task one"
+  "Rig Worker Two|Rig: long-running task two"
+)
+# Open items of each kind, on top of the one failed run: 4 blocked + 4 review
+# + 4 questions + the failed run and its agent alert is at least 13 rows.
+RIG_SEED_PER_KIND=4
+RIG_SEED_MIN_ROWS=10
 
 rig_pc_api() {
   # rig_pc_api <METHOD> <path> [json-body] — the body on stdout, failure on HTTP errors.
@@ -211,6 +223,40 @@ rig_seed_issue() {
       "$(jq -nc --arg t "$title" --argjson f "$fields" '{title: $t} + $f')" | jq -r '.id') || return 1
   fi
   printf '%s\n' "$id"
+}
+
+rig_pc_live_runs() {
+  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
+    jq -r '[.[] | select(.status == "running")] | length'
+}
+
+rig_pc_seed_workers() {
+  # Each worker is a process agent that sleeps for an hour, so its run is live
+  # for as long as the rig is. Assigning its task wakes it. A task that
+  # already has a live run is left alone, which keeps a second seed quiet.
+  local company=$1 spec name title agent task
+  for spec in "${RIG_SEED_WORKERS[@]}"; do
+    name=${spec%%|*}
+    title=${spec#*|}
+    agent=$(rig_pc_api GET "/api/companies/$company/agents" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].id // empty') ||
+      rig_die "seed: could not list agents"
+    [[ -n $agent ]] ||
+      agent=$(rig_pc_api POST "/api/companies/$company/agents" "$(jq -nc --arg n "$name" '{
+        name: $n, role: "engineer", adapterType: "process",
+        adapterConfig: {command: "sleep", args: ["3600"], timeoutSec: 0},
+        runtimeConfig: {heartbeat: {enabled: false}}}')" | jq -r '.id') ||
+      rig_die "seed: could not create agent $name"
+    task=$(rig_seed_issue "$company" "$title" \
+      "$(jq -nc --arg a "$agent" '{status: "todo", assigneeAgentId: $a}')") ||
+      rig_die "seed: could not create task '$title'"
+  done
+
+  local deadline=$((SECONDS + 90))
+  while ((SECONDS < deadline)); do
+    (($(rig_pc_live_runs "$company") >= ${#RIG_SEED_WORKERS[@]})) && return 0
+    sleep 2
+  done
+  rig_die "seed: the worker agents have no live run after 90s"
 }
 
 rig_pc_seed() {
@@ -242,24 +288,28 @@ rig_pc_seed() {
   task=$(rig_seed_issue "$company" "Rig: failing task" \
     "$(jq -nc --arg a "$agent" '{status: "todo", assigneeAgentId: $a}')") ||
     rig_die "seed: could not create the failing task"
-  blocked=$(rig_seed_issue "$company" "Rig: blocked on you" \
-    '{"status":"blocked","unblockDescriptor":{"owner":"board","action":"Rig seed: pick the next step for this task."}}') ||
-    rig_die "seed: could not create the blocked task"
-  review=$(rig_seed_issue "$company" "Rig: waiting for review" \
-    '{"status":"in_review","assigneeUserId":"local-board"}') ||
-    rig_die "seed: could not create the review task"
-  question=$(rig_seed_issue "$company" "Rig: needs an answer" \
-    '{"status":"todo","assigneeUserId":"local-board"}') ||
-    rig_die "seed: could not create the question task"
+  local n
+  for ((n = 1; n <= RIG_SEED_PER_KIND; n++)); do
+    blocked=$(rig_seed_issue "$company" "Rig: blocked on you $n" \
+      '{"status":"blocked","unblockDescriptor":{"owner":"board","action":"Rig seed: pick the next step for this task."}}') ||
+      rig_die "seed: could not create blocked task $n"
+    review=$(rig_seed_issue "$company" "Rig: waiting for review $n" \
+      '{"status":"in_review","assigneeUserId":"local-board"}') ||
+      rig_die "seed: could not create review task $n"
+    question=$(rig_seed_issue "$company" "Rig: needs an answer $n" \
+      '{"status":"todo","assigneeUserId":"local-board"}') ||
+      rig_die "seed: could not create question task $n"
+    rig_pc_api POST "/api/issues/$question/interactions" "$(jq -nc --arg k "rig-seed:question:$n" --arg p "Rig question $n: which option?" '{
+      kind: "ask_user_questions", idempotencyKey: $k, continuationPolicy: "none",
+      payload: {version: 1,
+        questionSet: {schema: "paperclip.question_set.v1", questions: [
+          {id: "detail", prompt: $p, answerMode: "text", required: true}]},
+        questions: [{id: "detail", prompt: $p, selectionMode: "single",
+          required: true, options: [{id: "text", label: "Your answer", freeText: true}]}]}}')" >/dev/null ||
+      rig_die "seed: could not create interaction $n"
+  done
 
-  rig_pc_api POST "/api/issues/$question/interactions" '{
-    "kind": "ask_user_questions", "idempotencyKey": "rig-seed:question", "continuationPolicy": "none",
-    "payload": {"version": 1,
-      "questionSet": {"schema": "paperclip.question_set.v1", "questions": [
-        {"id": "detail", "prompt": "Rig question: which option?", "answerMode": "text", "required": true}]},
-      "questions": [{"id": "detail", "prompt": "Rig question: which option?", "selectionMode": "single",
-        "required": true, "options": [{"id": "text", "label": "Your answer", "freeText": true}]}]}}' >/dev/null ||
-    rig_die "seed: could not create the interaction"
+  rig_pc_seed_workers "$company"
 
   local deadline=$((SECONDS + 120)) run=""
   while ((SECONDS < deadline)); do
@@ -296,5 +346,16 @@ SQL
     fi
   done
   ((missing == 0)) || rig_die "seed: $missing inbox kind(s) missing; counts: $counts"
+
+  local rows live
+  rows=$(jq -r '.total // (.items | length) // 0' < <(rig_pc_api GET "/api/companies/$company/attention?limit=100")) ||
+    rig_die "seed: could not count the inbox rows"
+  ((rows >= RIG_SEED_MIN_ROWS)) ||
+    rig_die "seed: $rows inbox rows, need $RIG_SEED_MIN_ROWS; counts: $counts"
+  rig_ok "inbox has $rows rows (need $RIG_SEED_MIN_ROWS)"
+  live=$(rig_pc_live_runs "$company")
+  ((live >= ${#RIG_SEED_WORKERS[@]})) ||
+    rig_die "seed: $live live run(s), need ${#RIG_SEED_WORKERS[@]}"
+  rig_ok "$live agents have a live run"
   rig_ok "seeded company '$RIG_SEED_COMPANY' ($company): $(jq -c 'with_entries(select(.value > 0))' <<<"$counts")"
 }
