@@ -141,6 +141,12 @@ merged. The reviewer (Panel QA) reads this list against the diff, and the author
 never certifies their own change. The promises behind the list are in
 [`docs/security.md`](../security.md).
 
+A class is named by its mechanism before the fix: the fix starts with the
+platform call that does the harm and the test that bans that call, checked
+against the source of the Qt, Quickshell and Paperclip versions users run now.
+A class drawn from the last finding's words catches only that case; one drawn
+at the call catches the next variant.
+
 1. **Values from outside never reach a command as an option or a page as markup.**
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
@@ -281,6 +287,9 @@ The record is a document on the release task:
 - *Evidence* is a screenshot, a log line or a test name, from the rig only.
 - A fail is a GitHub issue, fixed on `develop`, and the row is checked again
   on the new head. A release does not go with a fail.
+- An earlier regression's pass carries forward for unchanged code only when the
+  trees are byte-identical (`git rev-parse <sha>^{tree}`) and the scripted suite
+  passed on the candidate; otherwise that row is run again.
 
 ### Needs the owner's setup
 
@@ -356,7 +365,13 @@ The review also lists the capabilities the marketplace bot will report, for the
 maintainer's review.
 
 - A finding is reproduced where possible.
-- Every finding gets a search for the same class across the plugin.
+- Every finding gets a search for the same class across the plugin, and its
+  class is named by the platform call that does the harm (*Every pull
+  request*), not by the finding's words.
+- An earlier verdict carries forward for unchanged code only when the trees are
+  byte-identical (`git rev-parse <sha>^{tree}` of the reviewed commit and of the
+  candidate give the same hash) and the scripted suite passed on the candidate.
+  Otherwise that code is read again.
 - An unfixed vulnerability stays off public GitHub (issues, commits, pull
   request text) until its fix is released.
 
