@@ -408,7 +408,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(580))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight + Style.space(12) + footerBlock.implicitHeight, Style.space(580))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -446,7 +446,11 @@ Panel {
 
       Flickable {
         id: panelFlick
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: footerBlock.top
+        anchors.bottomMargin: Style.space(12)
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
@@ -935,85 +939,93 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
             }
           }
+        }
+      }
 
-          PanelSeparator {
-            foreground: root.foreground
-            opacity: root.revealAt(5)
+      Column {
+        id: footerBlock
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        spacing: Style.space(12)
+
+        PanelSeparator {
+          foreground: root.foreground
+          opacity: root.revealAt(5)
+        }
+
+        // ---------------------------------------------------------- footer
+        RowLayout {
+          width: parent.width
+          spacing: Style.space(8)
+          opacity: root.revealAt(6)
+          transform: Translate { y: root.revealLift(6) }
+
+          // The keys this panel answers to, set as caps so they read as
+          // keys rather than as a sentence.
+          Flow {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            spacing: Style.space(6)
+
+            Repeater {
+              model: Model.hintKeys(service.report, service.quiet)
+
+              KeyHint {
+                required property var modelData
+                hint: modelData
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "· " + Model.notificationLabel(service.notifyLevel)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
           }
 
-          // ---------------------------------------------------------- footer
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            opacity: root.revealAt(6)
-            transform: Translate { y: root.revealLift(6) }
+          PanelActionButton {
+            iconText: Model.GLYPH_SLEEP
+            tooltipText: service.quiet.mode === "plugin"
+              ? "Wake Paperclip — hold Shift to snooze until morning instead"
+              : "Snooze Paperclip for an hour — hold Shift to snooze until morning"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.toggleSnooze(snoozeShift.shiftHeld)
 
-            // The keys this panel answers to, set as caps so they read as
-            // keys rather than as a sentence.
-            Flow {
-              Layout.fillWidth: true
-              Layout.alignment: Qt.AlignVCenter
-              spacing: Style.space(6)
-
-              Repeater {
-                model: Model.hintKeys(service.report, service.quiet)
-
-                KeyHint {
-                  required property var modelData
-                  hint: modelData
-                }
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: "· " + Model.notificationLabel(service.notifyLevel)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
+            MouseArea {
+              id: snoozeShift
+              property bool shiftHeld: false
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              onPressed: function(mouse) {
+                shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                mouse.accepted = false
               }
             }
+          }
 
-            PanelActionButton {
-              iconText: Model.GLYPH_SLEEP
-              tooltipText: service.quiet.mode === "plugin"
-                ? "Wake Paperclip — hold Shift to snooze until morning instead"
-                : "Snooze Paperclip for an hour — hold Shift to snooze until morning"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.toggleSnooze(snoozeShift.shiftHeld)
+          PanelActionButton {
+            iconText: Model.GLYPH_REFRESH
+            tooltipText: "Refresh"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            enabled: !service.refreshing
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.refresh()
+          }
 
-              MouseArea {
-                id: snoozeShift
-                property bool shiftHeld: false
-                anchors.fill: parent
-                acceptedButtons: Qt.LeftButton
-                onPressed: function(mouse) {
-                  shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                  mouse.accepted = false
-                }
-              }
-            }
-
-            PanelActionButton {
-              iconText: Model.GLYPH_REFRESH
-              tooltipText: "Refresh"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !service.refreshing
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.refresh()
-            }
-
-            PanelActionButton {
-              iconText: Model.GLYPH_WRENCH
-              tooltipText: "Fix Paperclip with your agent"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.runDoctor()
-            }
+          PanelActionButton {
+            iconText: Model.GLYPH_WRENCH
+            tooltipText: "Fix Paperclip with your agent"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.runDoctor()
           }
         }
       }
