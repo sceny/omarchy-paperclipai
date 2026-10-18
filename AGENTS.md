@@ -9,7 +9,7 @@ lives in `sceny/omarchy-devices`): `dev/sandbox dev start --repo
 sceny/omarchy-paperclipai` for Sceny's own working tree, `dev/sandbox run
 sceny/omarchy-paperclipai <sha>` for one exact commit. The rig (`dev/rig`) runs
 only inside it, on its own image with a throwaway Paperclip instance
-(`README.md`, *Testing the plugin*).
+(`docs/internals/development.md`; the rig's verbs are in `README.md`, *Testing the plugin*).
 
 ## Read before you change anything
 
@@ -326,5 +326,6 @@ in order; the detail, the checklist and the record templates are in
 | `CHANGELOG.md` | what's new, each version's notes |
 | `test/` | the checks; `test/run_all.sh` runs them |
 | `docs/security.md` | what the plugin promises |
+| `docs/internals/development.md` | the sandbox: sessions for your own tree, runs of one exact commit |
 | `docs/internals/releasing.md` | the per-pull-request check, the release chain and its checks |
 | `assets/` | images |
