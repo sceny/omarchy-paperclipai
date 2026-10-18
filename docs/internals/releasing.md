@@ -265,15 +265,27 @@ same for any commit once the workflow is on `main`.
 
 ## Regression in the rig
 
-Panel QA runs the whole plugin in the rig (`dev/rig ci`, or `dev/rig up`, then
-`dev/rig check`, `dev/rig seed` and `dev/rig screenshot`), on the candidate: the
-head of `develop` after the release pull request is merged. Every feature gets
+Panel QA runs the whole plugin in the sandbox, on the candidate: the head of
+`develop` after the release pull request is merged, by its full SHA:
+
+```bash
+dev/sandbox run sceny/omarchy-paperclipai <sha> --steps tests,rig,script --script regression.sh
+```
+
+The tests run, `dev/rig ci` runs its checks, and the script runs with a rig up
+and drives the feature passes (`dev/rig seed`, `dev/rig screenshot`, the panel
+over IPC); it writes its evidence under `$SANDBOX_OUT`, which the run brings out
+as data. While writing or debugging the script, a `dev/sandbox dev start --repo
+sceny/omarchy-paperclipai` session on a checkout of that SHA does the same
+interactively; the record is the `run`.
+Every feature gets
 one pass or fail against its rule in `AGENTS.md`, not only what changed: the
 bar mark and count, each panel list and its filter cards, a row opening its
 item, snooze and focus, notifications, the setup, service and doctor scripts.
 
 The rig has its own HOME, shell and throwaway instance (`README.md`, *Testing
-the plugin*). Nothing runs against the owner's desktop or their instance. The
+the plugin*), in a container with no network. Nothing runs against the owner's
+desktop or their instance. The
 panel is looked at, not only measured.
 
 The record is a document on the release task:
@@ -284,7 +296,7 @@ The record is a document on the release task:
 
 - *Rule* names the rule by its number.
 - *How checked* is a command or IPC call someone else can repeat.
-- *Evidence* is a screenshot, a log line or a test name, from the rig only.
+- *Evidence* is a screenshot, a log line or a test name, from the sandbox's rig only.
 - A fail is a GitHub issue, fixed on `develop`, and the row is checked again
   on the new head. A release does not go with a fail.
 - An earlier regression's pass carries forward for unchanged code only when the
@@ -317,16 +329,19 @@ owner has done it or waived it, and the go waits for it.
 ## Cold install and upgrade
 
 Both start from the tag that is live now (`git tag`, the latest `vX.Y.Z` on
-`main`). Plugin DevOps runs them in the rig and Panel QA passes them.
+`main`). Plugin DevOps runs them in the sandbox and Panel QA passes them: the
+cold install in `dev/sandbox run` on the candidate's SHA (`--steps script`), the
+upgrade in a `dev/sandbox dev` session, which holds the live tag beside the
+candidate's tree (`dev sync --tree DIR --as live`).
 
-**Cold install.** The rig starts with an empty HOME, no state directory, no
+**Cold install.** The sandbox's rig starts with an empty HOME, no state directory, no
 token and none of the plugin's skills: that is a cold computer. Run
 `omarchy-paperclip-setup` in it. Every step finishes by itself or stops at the
 user's one step, and no package is asked for twice. Each step is a row with its
 evidence, and what the rig cannot prove goes on the *needs the owner's setup*
 list.
 
-**Upgrade.** Install the live tag in the rig with a state directory that holds
+**Upgrade.** Install the live tag in the sandbox's rig with a state directory that holds
 a snooze state, then move to the candidate. The old state reads back unchanged,
 nothing is written until the user changes something, and the shell answers over
 IPC after the restart: a QML error takes the whole widget off the bar, and it
