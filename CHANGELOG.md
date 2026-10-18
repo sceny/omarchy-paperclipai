@@ -25,9 +25,11 @@ GitHub release with these notes.
 
 - **Urls open only on the instance's own origin**: a url from the instance
   that points anywhere else is not opened.
-- **API clients are boxed in**: no redirect is followed, and the token goes
-  only to an `https` address or to a loopback listener that belongs to your
-  user.
+- **API clients are boxed in**: no redirect is followed, and nothing is sent,
+  token or not, except to an `https` address or to a loopback listener that
+  belongs to your user. The service, setup, doctor and web app scripts follow
+  the same rule: a program another user runs on Paperclip's port cannot make
+  them believe Paperclip is up, and cannot supply the launcher icon.
 - **Nothing a person or an agent wrote reaches an AI session**: the doctor
   bundle leaves inbox text out, and the session is told its files are
   untrusted data.

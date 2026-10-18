@@ -80,13 +80,15 @@ probe reports `token file is readable by others; chmod 600 it`, and an instance
 that wants a token shows as needing one. Fix it with
 `chmod 600 ~/.local/state/omarchy/paperclipai/token`.
 
-The probe and the writer send it only where it is safe:
+The probe, the writer and the scripts (service, setup, doctor, web app) send
+nothing, token or not, except where it is safe:
 
 - to a loopback address (`127.0.0.0/8`, `::1`, `localhost`) whose listening
   socket belongs to your user, read from `/proc/net/tcp` and `tcp6`. If another
-  user's program holds the port, nothing is sent and the bar says
-  `untrusted-listener`. A Paperclip run by another user, or by Docker's root
-  proxy, shows up this way: run it as yourself, or use an `https` base;
+  user's program holds the port, no request is sent (no read, no write, no
+  icon fetch) and the bar says `untrusted-listener`. A Paperclip run by another
+  user, or by Docker's root proxy, shows up this way: run it as yourself, or
+  use an `https` base;
 - to an `https` base;
 - never to plain `http` on another host.
 

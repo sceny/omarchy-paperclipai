@@ -721,12 +721,24 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=6.0, help="per-request timeout seconds")
     parser.add_argument("--webapp-name", default="", help="web app launcher name")
     parser.add_argument("--compact", action="store_true", help="print one line of JSON")
+    parser.add_argument("--get", metavar="PATH", default="",
+                        help="print the body of one tokenless GET of PATH on the API base and exit; "
+                             "exit 1 when nothing was answered or the answer was not 200. "
+                             "The shell scripts' only way to talk to the instance.")
     parser.add_argument("--redacted", action="store_true",
                         help="leave out every title, detail, name and url. For anything an AI session reads.")
     args = parser.parse_args(argv)
 
     os.umask(0o077)
     instance = args.instance or env("PAPERCLIP_OMARCHY_INSTANCE", "default")
+    if args.get:
+        reply = fetch(resolve_api_base(args.api_base, instance), "", "GET", args.get,
+                      timeout=max(0.5, args.timeout))
+        if reply.error or reply.status != 200:
+            return 1
+        sys.stdout.buffer.write(reply.raw)
+        sys.stdout.buffer.flush()
+        return 0
     token, token_problem = read_token_checked()
     api = Api(resolve_api_base(args.api_base, instance), token, max(0.5, args.timeout))
     name = args.webapp_name or env("PAPERCLIP_OMARCHY_WEBAPP_NAME", DEFAULT_WEBAPP_NAME)

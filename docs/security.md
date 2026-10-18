@@ -21,6 +21,10 @@ makes about that. Each one is checked on every pull request
   one. A program another user runs on Paperclip's port receives no request
   (no read, no dismissal, no wake-up), and the panel says "Not your Paperclip"
   instead of showing what it answered.
+- The scripts (service, setup, doctor, web app) never call the instance with
+  `curl` or anything of their own: they ask through the probe's `--get`, which
+  runs the same check. A foreign program on the port cannot make a script
+  believe Paperclip is up, and cannot supply the launcher icon.
 - A response is read up to 4 MiB. More is an error.
 
 ## Text from the instance is data

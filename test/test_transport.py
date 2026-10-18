@@ -15,9 +15,11 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -270,6 +272,108 @@ class Fetch(unittest.TestCase):
             self.assertEqual(reply.status, 500)
         finally:
             server.close()
+
+
+class GetMode(unittest.TestCase):
+    """`--get`: the shell scripts' one way to read the instance."""
+
+    def run_get(self, base, uid_lookup, path="/api/health"):
+        original = status._proc_listener_uids
+        status._proc_listener_uids = uid_lookup
+        saved = {k: os.environ.get(k) for k in ("PAPERCLIP_OMARCHY_TOKEN", "XDG_STATE_HOME")}
+        os.environ["PAPERCLIP_OMARCHY_TOKEN"] = TOKEN
+        os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp()
+        buffer = io.BytesIO()
+        real_stdout, sys.stdout = sys.stdout, types.SimpleNamespace(buffer=buffer)
+        try:
+            code = status.main(["--api-base", base, "--get", path])
+        finally:
+            sys.stdout = real_stdout
+            status._proc_listener_uids = original
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        return code, buffer.getvalue()
+
+    def test_our_own_listener_is_read_without_a_token(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"icon")))
+        try:
+            code, body = self.run_get(server.base, owned_by(ME), "/apple-touch-icon.png")
+            self.assertEqual((code, body), (0, b"icon"))
+            self.assertNotIn("Authorization", server.requests[0])
+        finally:
+            server.close()
+
+    def test_a_listener_that_is_not_ours_gets_no_request_and_gives_no_body(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"icon")))
+        try:
+            code, body = self.run_get(server.base, owned_by(OTHER, ME), "/apple-touch-icon.png")
+            self.assertEqual((code, body), (1, b""))
+            self.assertEqual(server.requests, [], "a request reached the foreign listener")
+        finally:
+            server.close()
+
+    def test_plain_http_to_another_host_connects_nowhere(self):
+        self.assertEqual(self.run_get("http://192.0.2.1:3100", owned_by(ME)), (1, b""))
+
+    def test_an_error_answer_is_a_failure(self):
+        server = Server(lambda h: (h.send_response(404), h.end_headers(), h.wfile.write(b"no")))
+        try:
+            self.assertEqual(self.run_get(server.base, owned_by(ME)), (1, b""))
+        finally:
+            server.close()
+
+
+class ShellScripts(unittest.TestCase):
+    """The scripts' health check and icon fetch obey the same rule as fetch()."""
+
+    def shell(self, script, base, extra_path=""):
+        env = dict(os.environ, PAPERCLIP_OMARCHY_API_BASE=base,
+                   XDG_STATE_HOME=tempfile.mkdtemp(), HOME=tempfile.mkdtemp())
+        if extra_path:
+            env["PATH"] = extra_path + os.pathsep + env["PATH"]
+        return subprocess.run(
+            ["bash", "-c", 'source "%s/lib/common.sh"; %s' % (os.path.dirname(HERE), script)],
+            env=env, capture_output=True, timeout=60)
+
+    def test_health_is_read_from_our_own_listener(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(),
+                                   h.wfile.write(b'{"status":"ok"}')))
+        try:
+            self.assertEqual(self.shell("pc_health_ok", server.base).returncode, 0)
+            self.assertEqual(len(server.requests), 1)
+        finally:
+            server.close()
+
+    def test_health_over_plain_http_to_another_host_is_not_asked(self):
+        self.assertNotEqual(self.shell("pc_health_ok", "http://192.0.2.1:3100").returncode, 0)
+
+    def test_the_icon_is_fetched_from_our_own_listener_only(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"png")))
+        try:
+            run = self.shell("pc_get /apple-touch-icon.png 6", server.base)
+            self.assertEqual((run.returncode, run.stdout), (0, b"png"))
+        finally:
+            server.close()
+        self.assertNotEqual(self.shell("pc_get /apple-touch-icon.png 6", "http://192.0.2.1:3100").returncode, 0)
+
+    def test_no_shipped_script_talks_to_the_instance_with_curl(self):
+        root = os.path.dirname(HERE)
+        found = []
+        for folder in ("bin", "lib"):
+            for name in sorted(os.listdir(os.path.join(root, folder))):
+                path = os.path.join(root, folder, name)
+                if not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8") as handle:
+                    for number, line in enumerate(handle, 1):
+                        if line.lstrip().startswith("#"):
+                            continue
+                        if "curl" in line.split("#", 1)[0]:
+                            found.append("%s/%s:%d" % (folder, name, number))
+        self.assertEqual(found, [], "use pc_get (the probe's --get), which checks the listener's owner")
 
 
 class Probe(unittest.TestCase):

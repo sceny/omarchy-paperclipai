@@ -62,11 +62,20 @@ pc_api_base() {
   printf '%s\n' "${url%/}"
 }
 
+pc_get() {
+  # pc_get <path> [seconds]: the body of one GET on the instance, on stdout.
+  # It goes through the probe, so it obeys the same rule as every other request
+  # to the instance: nothing is sent unless the listener is this user's own
+  # (loopback) or the base is https. Fails otherwise, and on any non-200 answer.
+  python3 "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-status" \
+    --api-base "$(pc_api_base)" --instance "$PAPERCLIP_INSTANCE" \
+    --timeout "${2:-4}" --get "$1" 2>/dev/null
+}
+
 pc_health_ok() {
   # Is the instance answering right now?
-  local base body
-  base=$(pc_api_base)
-  body=$(curl -fs --max-time 4 "$base/api/health") || return 1
+  local body
+  body=$(pc_get /api/health 4) || return 1
   jq -e '.status == "ok"' <<<"$body" >/dev/null 2>&1
 }
 
