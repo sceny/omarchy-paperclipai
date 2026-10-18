@@ -56,7 +56,7 @@ also in `journalctl --user -u sceny-plugins-follow-develop`.
   panel on `master` of `sceny/omarchy-gha-runners`, so no one runs
   `omarchy plugin update` for it.
 - **Never leave an install on a feature branch for a live check.** The timer
-  skips it, so it silently stops following. Use `dev/rig`.
+  skips it, so it silently stops following. Use the sandbox's rig.
 - A pass that cannot fast-forward or fails validation exits non-zero, so
   `systemctl --user --failed` shows it.
 - `test/test_follow_develop.sh` tests it against throwaway repos.
@@ -140,14 +140,42 @@ commit is in `skills/upstream.list`.
 
 ## Testing the plugin
 
-Unit checks, no desktop needed: `node test/test_model.mjs`, `node test/test_inbox.mjs`,
-`node test/test_transport.mjs`, `python3 -m unittest test/test_transport.py`.
+All testing runs in `dev/sandbox`, a rootless podman container with no home, no
+credentials, no network and no host socket (`dev/sandbox` is in
+[sceny/omarchy-devices](https://github.com/sceny/omarchy-devices), where
+`docs/internals/development.md` describes it). This repository has an image of
+its own, with Hyprland, Quickshell, Omarchy's shell, the Paperclip CLI and
+Postgres, and nothing of Android. The rig runs only inside it. Run `dev/sandbox`
+from a Devices checkout; two modes:
+
+```sh
+# Your own working tree: one container kept until `dev stop` or its TTL.
+dev/sandbox dev start --repo sceny/omarchy-paperclipai    # prints the session id
+dev/sandbox dev sync --tree <this checkout>               # tracked files in; `git add` a new file first
+dev/sandbox dev exec -- bash test/run_all.sh              # the unit checks
+dev/sandbox dev rig selftest                              # the rig's lease and reap logic
+dev/sandbox dev up                                        # the rig, hidden (a few minutes)
+dev/sandbox dev rig check                                 # every check against it
+dev/sandbox dev rig seed                                  # rows to look at
+dev/sandbox dev shot NAME                                 # a screenshot of the rig
+dev/sandbox dev pull --out DIR                            # screenshots out, as data
+dev/sandbox dev stop --all && dev/sandbox verify-clean
+
+# One exact commit (40 hex): read-only, one container per unit, deleted after.
+dev/sandbox run sceny/omarchy-paperclipai <sha>           # pc-tests, pc-selftest, qml-parse, manifest, rig-ci
+dev/sandbox run sceny/omarchy-paperclipai <sha> --steps tests
+dev/sandbox run sceny/omarchy-paperclipai <sha> --steps script --script qa.sh   # your script, with the rig up
+```
+
+With more than one session, `--session ID` goes before the verb; `--timeout S`
+(default 600) goes there too. This repository's rig has no `record` verb. Panel
+QA's regression and the cold install run as `run ... --steps script`
+(`docs/internals/releasing.md`).
 
 `dev/rig` tests the plugin end to end without touching your desktop or your
-Paperclip instance. It needs `Hyprland`, `labwc` and `wtype` (the hidden view), `quickshell`,
-`omarchy`, `hyprctl`, `grim`, `jq`, `curl`, `git`, `python3`, `ss`, `flock`,
-`setsid`, `prlimit` and the Paperclip CLI. `dev/rig seed` also needs `psql` (the
-`postgresql` package; the rig only uses the client).
+Paperclip instance. Its verbs below are the ones `dev rig` passes on inside the
+session; written as `dev/rig <verb>`, they run in the sandbox as `dev/sandbox dev
+rig <verb>`.
 
 ```sh
 dev/rig ci                     # up, run every check, tear down, verify. One command.
@@ -162,8 +190,6 @@ dev/rig logs shell             # shell | compositor | instance | keeper | stubs
 dev/rig status                 # what is running, and where
 dev/rig down                   # tear it down and prove nothing is left
 
-dev/rig show                   # you only: put the rig on your screen as a window
-dev/rig hide                   # take it off again
 dev/rig ps                     # every rig: owner, age, time left
 dev/rig reap                   # end every rig whose owner is gone or whose TTL is up
 dev/rig selftest               # test the lease, keeper, ps and reap; needs no compositor
@@ -184,8 +210,7 @@ driving the shell work the same hidden. Every `up`, `down` and `check` snapshots
 your session (`hyprctl clients`, `workspaces`, `activeworkspace`, `activewindow`,
 read-only) before and after and prints whether anything changed.
 
-`labwc` and `wtype` are one-time host packages (`sudo pacman -S --needed labwc
-wtype`). Without them the rig stops and says so. It does not fall back to a
+`labwc` and `wtype` are in the sandbox's image. Without them the rig stops and says so. It does not fall back to a
 window on your desktop or to the DRM backend, which would take your GPU and
 input devices. `RIG_RENDER_NODE` picks the render node (default: the first
 `/dev/dri/renderD*` whose Mesa EGL initialises).
@@ -197,12 +222,6 @@ only), checks that a frame can be captured, and starts the compositor again if
 not, up to 20 times, so `up` can take a few extra seconds. A failed `up` keeps
 its logs in `$RIG_TMP_ROOT/last-failed-up`.
 
-To look at the rig yourself, run `dev/rig show` (or `dev/rig up --visible`). The
-compositor moves into a nested window in your session; `dev/rig hide` moves it
-back. HOME, the installed plugin and the Paperclip instance stay as they are.
-Agents and CI never open the window by themselves: with `PAPERCLIP_AGENT_ID`,
-`PAPERCLIP_RUN_ID`, `CLAUDECODE`, `CI` or `GITHUB_ACTIONS` set, `show` and
-`--visible` refuse unless the owner asked and `RIG_ALLOW_VISIBLE=1` says so.
 
 ### Owner, lease and no zombies
 
@@ -338,8 +357,7 @@ whatever it started; so does `ci`.
 ### CI
 
 `dev/rig ci` runs hidden, so it works on a headless runner as well as under a
-desktop session. It needs `labwc` and `wtype`; on a self-hosted runner that belongs in the
-runner image. `ci` owns its rig: if the job is killed, the keeper ends the rig
+desktop session. A CI runner needs `labwc` and `wtype` in its image; the sandbox has them. `ci` owns its rig: if the job is killed, the keeper ends the rig
 within seconds, and the TTL (30 minutes) is the backstop.
 
 ### Pointing the rig at another plugin
@@ -358,4 +376,5 @@ Copy the whole `dev/` directory into the other plugin repo and edit
 
 It proves install, enable, disable, remove, script behaviour and that the shell
 loads the plugin. How the panel looks and behaves is Panel QA's call: bring the
-rig up with `dev/rig up` and, when they want to look, `dev/rig show`. The window is theirs to drive.
+rig up with `dev/sandbox dev up`, take screenshots with `dev/sandbox dev shot`,
+and read them with `dev/sandbox dev pull`. The owner looks at those, never at a live rig.
