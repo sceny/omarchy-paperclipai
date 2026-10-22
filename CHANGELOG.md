@@ -10,6 +10,10 @@ GitHub release with these notes.
 
 ### Highlights
 
+- **Start and stop Paperclip from the panel**: a row under the title shows
+  whether the instance is running, starting, stopping or stopped, with one
+  button (key `v`) for Start or Stop. Stopping an instance with agents at work
+  asks once. A change made outside the panel shows in the row within a poll.
 - **Clicking an inbox row opens that item**: a row opens its page in the
   browser. Only the board itself raises the Paperclip web app window, because a
   raised window takes no address from outside and the click showed nothing.

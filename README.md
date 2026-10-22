@@ -94,6 +94,30 @@ nothing, token or not, except where it is safe:
 
 A redirect is never followed, and an answer over 4 MiB is an error.
 
+## Start and stop from the panel
+
+The row under the panel's title says whether Paperclip is running, and offers
+the one thing that fits. It is read from the probe, so a start or stop made
+outside the panel (`systemctl --user`, a terminal) shows within a poll.
+
+| Row says | Offered | What runs |
+| --- | --- | --- |
+| Running (background service) | `stop`, key `v` | `omarchy-paperclip-service stop` |
+| Running (started in a terminal) | nothing: close that terminal | |
+| Stopped | `start`, key `v`, or the *Start Paperclip* card | `omarchy-paperclip-service start` |
+| Starting, Stopping | nothing while it moves | |
+
+- **Stop asks once when agents are at work.** The first press names how many
+  and turns the button into *press again*; the second, within six seconds,
+  stops it. An idle instance stops at the first press.
+- **A stop from the panel stays stopped until the shell restarts.** *Keep
+  Paperclip running* (`autoStart`) does not start it again meanwhile.
+- A refusal (no background service installed, the script failed) is the
+  script's own sentence in the panel's subtitle.
+- From a script: `omarchy-shell paperclip serviceState`, `startService`,
+  `stopService` (answers `confirm` for the first press with agents at work),
+  `toggleService`.
+
 ## Snooze and focus
 
 Four states, shown in the panel's strip and on the bar icon (a zzz replaces the

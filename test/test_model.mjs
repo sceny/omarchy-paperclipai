@@ -585,4 +585,87 @@ group("a notification request carries the words as data for the helper", () => {
   assert.equal(JSON.parse(JSON.stringify(req)).exec[1], exec[1])
 })
 
+group("the service row says what the report says and offers one thing", () => {
+  const managed = { installed: true, active: true, activeState: "active" }
+  const running = (extra) => Object.assign({ state: "idle", reachable: true, working: 0, service: managed, cli: { installed: true } }, extra)
+  const stopped = (extra) => Object.assign({ state: "stopped", reachable: false, working: 0,
+    service: { installed: true, active: false, activeState: "inactive" }, cli: { installed: true } }, extra)
+
+  // Nothing to say before the first report, or when the plugin has no
+  // instance to speak of.
+  for (const report of [null, undefined, { state: "unknown" }, { state: "not-installed" },
+                        { state: "untrusted-listener", reachable: false }]) {
+    const control = Model.serviceControl(report, "")
+    assert.equal(control.state, "unavailable")
+    assert.equal(control.action, "")
+  }
+
+  // Running as the background service: Stop, and no question when idle.
+  let c = Model.serviceControl(running(), "")
+  assert.deepEqual([c.state, c.action, c.confirm], ["running", "stop", false])
+  // Every reachable state is running, including one that needs a token.
+  for (const state of ["idle", "working", "needs-you", "needs-auth"]) {
+    assert.equal(Model.serviceControl(running({ state }), "").state, "running", state)
+  }
+
+  // Agents at work: Stop asks once, and says how many.
+  c = Model.serviceControl(running({ state: "working", working: 3 }), "")
+  assert.deepEqual([c.action, c.confirm, c.working], ["stop", true, 3])
+  assert.equal(Model.stopConfirmText(3), "3 agents are at work — press again to stop")
+  assert.equal(Model.stopConfirmText(1), "1 agent is at work — press again to stop")
+
+  // Started in a terminal: no Stop is offered, because none exists.
+  c = Model.serviceControl(running({ state: "working", working: 2, service: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action, c.confirm], ["running", "", false])
+  assert.ok(c.detail.includes("terminal"))
+
+  // Stopped: Start for the service, Start for a CLI that runs in a terminal,
+  // nothing when there is neither.
+  c = Model.serviceControl(stopped(), "")
+  assert.deepEqual([c.state, c.action], ["stopped", "start"])
+  c = Model.serviceControl(stopped({ service: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action, c.detail], ["stopped", "start", "Starts in a terminal"])
+  c = Model.serviceControl(stopped({ service: { installed: false }, cli: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action], ["stopped", ""])
+
+  // The panel's own ask shows at once, with nothing to press meanwhile.
+  c = Model.serviceControl(stopped(), "start")
+  assert.deepEqual([c.state, c.action], ["starting", ""])
+  c = Model.serviceControl(running(), "stop")
+  assert.deepEqual([c.state, c.action], ["stopping", ""])
+  c = Model.serviceControl(stopped({ service: { installed: true, active: true, activeState: "active" } }), "stop")
+  assert.equal(c.state, "stopping")
+
+  // A change made outside the panel is followed from the report alone.
+  assert.equal(Model.serviceControl(stopped({ service: { installed: true, active: false, activeState: "activating" } }), "").state, "starting")
+  assert.equal(Model.serviceControl(running({ service: { installed: true, active: true, activeState: "deactivating" } }), "").state, "stopping")
+  // Up but not answering: Stop is still there, so a stuck one can be ended.
+  c = Model.serviceControl(stopped({ service: { installed: true, active: true, activeState: "active" } }), "")
+  assert.deepEqual([c.state, c.action], ["starting", "stop"])
+})
+
+group("a pending ask ends when the report agrees, and not before", () => {
+  const up = { reachable: true, service: { active: true, activeState: "active" } }
+  const down = { reachable: false, service: { active: false, activeState: "inactive" } }
+  const shuttingDown = { reachable: false, service: { active: true, activeState: "deactivating" } }
+  assert.equal(Model.settlePending("start", down), "start")
+  assert.equal(Model.settlePending("start", up), "")
+  assert.equal(Model.settlePending("stop", up), "stop")
+  assert.equal(Model.settlePending("stop", shuttingDown), "stop")
+  assert.equal(Model.settlePending("stop", down), "")
+  assert.equal(Model.settlePending("", up), "")
+  assert.equal(Model.settlePending("stop", null), "stop")
+  assert.ok(Model.SERVICE_PENDING_MS >= 60000, "a start waits up to a minute for health")
+})
+
+group("the footer offers the service key only when it does something", () => {
+  const keys = (report) => Model.hintKeys(report).map((h) => h.key)
+  const label = (report) => Model.hintKeys(report).find((h) => h.key === "v").label
+  const managed = { installed: true, active: true, activeState: "active" }
+  assert.ok(!keys({ state: "not-installed" }).includes("v"))
+  assert.ok(!keys({ state: "idle", reachable: true, service: { installed: false } }).includes("v"))
+  assert.equal(label({ state: "idle", reachable: true, service: managed }), "stop")
+  assert.equal(label({ state: "stopped", reachable: false, service: { installed: true, active: false }, cli: { installed: true } }), "start")
+})
+
 console.log("all groups passed")

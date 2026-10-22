@@ -24,6 +24,7 @@ run python3 test/test_tree_data.py
 run python3 test/test_shell_argv.py
 run python3 test/test_state.py
 run python3 test/test_notify.py
+run python3 test/test_service.py
 run bash test/test_follow_develop.sh
 run python3 test/test_release_prepare.py
 run python3 test/test_public_text.py
