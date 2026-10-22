@@ -67,6 +67,27 @@ is the vendor's own tool, and the one your instance is meant to be driven with.
 The plugin runs nothing else from the network. Its own skills are copied from
 `skills/`, never fetched.
 
+## Assets and the tests that hold them
+
+Each asset an attacker wants, with the tests that fail the build when it is
+exposed. *Held by* names `file` and `Class` (a JS test is its file); *Manual* is
+what no script can hold, and why; *Gap* is a way the asset leaks that no test
+holds, with the issue that adds it. `test/test_security_rules.py` fails when a
+row has neither a test nor a `manual:` line, when it names a file, class or test
+that does not exist, or when a gap has no issue.
+
+| Asset | Held by | Manual | Gap |
+|---|---|---|---|
+| **The API token** | `test/test_transport.py` `TokenVerdict`, `ProcTable`, `Fetch`, `Probe`; `test/test_transport.mjs`; `test/test_state.py` `TokenFile`; `test/test_private_text.py` `C1NoPrivateTextOnArgv` | manual: the check-then-connect race (the user's instance dies and another uid binds in the same milliseconds) has no test; accepted at the whole-plugin review | Ids from the API go into request paths unchecked ([#46](https://github.com/sceny/omarchy-paperclipai/issues/46)) |
+| **Inbox text** (titles, details, names, `whyNow`) | `test/test_security_rules.py` `QmlTextIsPlain`; `test/test_notify.py` `HelperOverDbus`, `ServiceUsesTheHelper`; `test/test_model.mjs`; `test/test_private_text.py` `C1NoPrivateTextOnArgv`; `test/test_shell_argv.py` `NoShellInScripts` | | |
+| **The user's account through the AI repair session** | `test/test_doctor_session.mjs`; `test/test_state.py` `Retention` | manual: what the coding agent does with its inputs is the agent's; the plugin holds only that no instance text goes in | |
+| **The state directory and what is on disk** | `test/test_state.py` `Modes`, `Retention`, `TokenFile` | | |
+| **Opening the board** (urls, windows) | `test/test_open.mjs` | | Control characters after the origin check ([#21](https://github.com/sceny/omarchy-paperclipai/issues/21)); the browser started with umask 077 ([#28](https://github.com/sceny/omarchy-paperclipai/issues/28)) |
+| **The clipboard** | `test/test_private_text.py` `C2NoClipboardRead` | | |
+| **The shared shell's availability** | `test/test_transport.py` `Fetch` (`test_an_oversize_body_is_an_error_and_is_not_read_to_the_end`); `test/test_inbox.mjs`; `test/test_security_rules.py` `NoNulBytes` | | The probe's output size under a large answer ([#45](https://github.com/sceny/omarchy-paperclipai/issues/45)); its timeout bounds one read, not the whole answer ([#27](https://github.com/sceny/omarchy-paperclipai/issues/27)) |
+| **Personal data and secrets in the repository** | `test/test_public_text.py` `Environment`, `WholePullRequest`, `Standing`; `test/test_tree_data.py` `NothingPrivateInTheTree`, `PlantedCases` | | |
+| **The repository and the release** (CI, supply chain) | `test/test_public_text.py` `Workflow`; `test/test_release_prepare.py` `ReleasePrepare`; `test/test_security_rules.py` `ListMatchesTests`, `AgentsFile` | manual: `npx -y paperclipai@latest` runs the product's own CLI unpinned when there is no managed install (*The Paperclip command line*) | The other workflows' triggers, token permissions and `run:` lines are read by no test ([#44](https://github.com/sceny/omarchy-paperclipai/issues/44)) |
+
 ## Reporting a fault
 
 A fault in any of the above is a bug in the plugin. Report it privately to the
