@@ -199,6 +199,12 @@ at the call catches the next variant.
    `cliphist` anywhere. A future text field is a plain-text `TextEdit`, never
    toggled read-only, as the Devices plugin's `PanelField`.
    Check: [`test/test_private_text.py`](../../test/test_private_text.py).
+9. **Nothing private is in the tree.**
+   No tracked text file holds a token (a JWT, a `Bearer` literal, a prefixed
+   key, a private key block), a UUID that is not made up, a tailnet or LAN host
+   name, a home path other than a placeholder, or an email address outside the
+   allowlist. A made-up value passes; a new fixture goes on the lint's allowlist.
+   Check: [`test/test_tree_data.py`](../../test/test_tree_data.py).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a
