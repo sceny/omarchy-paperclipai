@@ -85,7 +85,7 @@ that does not exist, or when a gap has no issue.
 | **Opening the board** (urls, windows) | `test/test_open.mjs` | | Control characters after the origin check ([#21](https://github.com/sceny/omarchy-paperclipai/issues/21)); the browser started with umask 077 ([#28](https://github.com/sceny/omarchy-paperclipai/issues/28)) |
 | **The clipboard** | `test/test_private_text.py` `C2NoClipboardRead` | | |
 | **The shared shell's availability** | `test/test_transport.py` `Fetch` (`test_an_oversize_body_is_an_error_and_is_not_read_to_the_end`); `test/test_inbox.mjs`; `test/test_security_rules.py` `NoNulBytes` | | The probe's output size under a large answer ([#45](https://github.com/sceny/omarchy-paperclipai/issues/45)); its timeout bounds one read, not the whole answer ([#27](https://github.com/sceny/omarchy-paperclipai/issues/27)) |
-| **Personal data and secrets in the repository** | `test/test_public_text.py` `Environment`, `WholePullRequest`, `Standing` | | No lint on the tree ([#37](https://github.com/sceny/omarchy-paperclipai/issues/37)) |
+| **Personal data and secrets in the repository** | `test/test_public_text.py` `Environment`, `WholePullRequest`, `Standing`; `test/test_tree_data.py` `NothingPrivateInTheTree`, `PlantedCases` | | |
 | **The repository and the release** (CI, supply chain) | `test/test_public_text.py` `Workflow`; `test/test_release_prepare.py` `ReleasePrepare`; `test/test_security_rules.py` `ListMatchesTests`, `AgentsFile` | manual: `npx -y paperclipai@latest` runs the product's own CLI unpinned when there is no managed install (*The Paperclip command line*) | The other workflows' triggers, token permissions and `run:` lines are read by no test ([#44](https://github.com/sceny/omarchy-paperclipai/issues/44)) |
 
 ## Reporting a fault
