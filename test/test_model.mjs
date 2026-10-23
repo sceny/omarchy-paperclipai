@@ -669,10 +669,12 @@ group("the footer offers the service key only when it does something", () => {
 
   // While a start or stop is under way, neither the key nor the card offers it again.
   const down = { state: "stopped", reachable: false, service: { installed: true, active: false } }
-  for (const pending of ["start", "stop"]) {
-    assert.ok(!Model.hintKeys(down, null, pending).some((h) => h.key === "v"), pending)
-    assert.equal(Model.primaryAction(down, pending), null, pending)
-  }
+  const up = { state: "idle", reachable: true, service: { installed: true, active: true, activeState: "active" } }
+  const hasV = (r, pending) => Model.hintKeys(r, null, pending).some((h) => h.key === "v")
+  assert.ok(hasV(up, "") && hasV(down, ""))
+  assert.ok(!hasV(down, "start"), "start pending")
+  assert.ok(!hasV(up, "stop"), "stop pending")
+  assert.equal(Model.primaryAction(down, "start"), null)
   assert.equal(Model.primaryAction(down, "").id, "start")
 })
 
