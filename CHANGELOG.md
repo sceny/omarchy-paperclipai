@@ -20,7 +20,9 @@ GitHub release with these notes.
 - **Panel and bar polish**: the summary cards filter the lists (the view only;
   the inbox setting and the bar count stay as they are), the loading line has
   its own row, the version is in the subtitle, and the bar mark and its bubble
-  are sized from the bar.
+  are sized from the bar. A count has a lane of its own beside the mark, in a
+  ring of the bar's colour, with larger digits, so a two-digit count reads at
+  a glance and never sits on the mark.
 - **Follow `develop`** (maintainers): a user timer keeps the installed plugins
   on `develop` current, validates each update, rolls back on a failure and
   restarts the shell afterwards.
