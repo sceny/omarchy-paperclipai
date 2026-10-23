@@ -18,6 +18,7 @@ removed, not an edited body; for a body, restart the shell.
 import glob
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -61,10 +62,14 @@ def main(argv):
         else:
             plugin_dir = a
     plugin_dir = plugin_dir or os.path.expanduser(f"~/.config/omarchy/plugins/{PLUGIN_ID}")
-    cmd = os.environ.get("LOADED_CODE_SHOW_CMD") or (
-        f'qs ipc -n -p "${{OMARCHY_PATH:-/usr/share/omarchy}}/shell" show')
+    shell_dir = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+    cmd = shlex.split(os.environ.get("LOADED_CODE_SHOW_CMD") or "") or [
+        "qs", "ipc", "-n", "-p", os.path.join(shell_dir, "shell"), "show"]
     for attempt in range(3):
-        done = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            done = subprocess.CompletedProcess(cmd, 1, "", "")
         listed, found = listed_functions(done.stdout, target)
         if found and not done.returncode:
             break
