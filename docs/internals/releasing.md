@@ -423,9 +423,9 @@ rule for every release closing, not for one version.
 - **The owner's machine runs the SHA.** Before the request, its plugin folder
   is at the SHA (`git rev-parse HEAD` in it) and the shell is restarted after
   the folder changed (`omarchy-restart-shell`; a rescan does not reload a
-  loaded plugin), and the panel answers over IPC. This repository has no
-  `dev/loaded-code` yet; when it has, R5 runs it and it must exit 0. Plugin
-  DevOps does this, never a command the owner pastes and runs.
+  loaded plugin), and the panel answers over IPC: `dev/loaded-code <plugin
+  folder>` exits 0 on the owner's machine. Plugin DevOps does this, never a
+  command the owner pastes and runs.
 - **Back to `develop`.** After the checks, the owner's machine goes back to
   `develop` the same way, so `dev/follow-develop` follows it again.
 - **Once, with every item.** The request holds the regression record, the

@@ -74,6 +74,7 @@ dev/sandbox dev exec -- bash test/run_all.sh             # everything that needs
 dev/sandbox dev rig selftest                             # the rig's own lease and reap logic; no compositor
 dev/sandbox dev up                                       # the rig: the plugin end to end, in its own Hyprland
 dev/sandbox dev rig check                                # then: seed, restart-shell, ... (see README)
+dev/sandbox dev rig exec -- dev/loaded-code <plugin folder>  # after every shell restart: exit 0; 1 means restart the shell
 dev/sandbox dev shot NAME; dev/sandbox dev pull --out DIR  # screenshots out, as data
 dev/sandbox dev stop --all; dev/sandbox verify-clean     # always
 ```
@@ -319,6 +320,7 @@ in order; the detail, the checklist and the record templates are in
 | `skills/` | Paperclip agent skills, copied unchanged from upstream, and the doctor skill |
 | `dev/rig` | the isolated end-to-end rig (`dev/rig.d/` holds its parts) |
 | `dev/follow-develop` | the timer script that keeps installs on `develop` |
+| `dev/loaded-code` | exit 0 when the running shell has the plugin's IPC functions; 1 means restart the shell |
 | `dev/sync-skills` | refresh `skills/` from an upstream checkout |
 | `dev/release-prepare` | make the release branch: version and CHANGELOG section |
 | `dev/release-notes` | the `release` workflow's reading of the version and its CHANGELOG section |
