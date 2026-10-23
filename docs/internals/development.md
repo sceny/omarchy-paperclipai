@@ -26,7 +26,7 @@ dev/sandbox dev rig check                                 # every check against 
 dev/sandbox dev rig seed                                  # rows to look at
 dev/sandbox dev shot NAME                                 # a screenshot of the rig
 dev/sandbox dev pull --out DIR                            # screenshots out, as data
-dev/sandbox dev stop --all && dev/sandbox verify-clean
+dev/sandbox dev --session <id> stop && dev/sandbox verify-clean
 
 # One exact commit (40 hex): read-only, one container per unit, deleted after.
 dev/sandbox run sceny/omarchy-paperclipai <sha>           # pc-tests, pc-selftest, qml-parse, manifest, rig-ci
