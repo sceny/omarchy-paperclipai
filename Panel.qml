@@ -45,7 +45,7 @@ Panel {
   property bool showAllRows: false
   readonly property var needs: showAllRows ? needGroups : needGroups.slice(0, needsCap)
   readonly property var moving: Model.filterMovingRows(service.report ? service.report.moving : [], activeFilter)
-  readonly property var action: Model.primaryAction(service.report)
+  readonly property var action: Model.primaryAction(service.report, service.servicePending)
   readonly property int rowCount: needs.length + moving.length
   readonly property var tiles: Model.statTiles(service.report)
   // How many open rows this list does not reach. Named, never hidden: a list
@@ -636,7 +636,7 @@ Panel {
                 urgentPill: service.stopArmed
                 label: service.stopArmed ? "press again" : serviceRow.control.action
                 tooltip: service.stopArmed
-                  ? Model.stopConfirmText(serviceRow.control.working)
+                  ? "Press again to stop Paperclip"
                   : (serviceRow.control.action === "stop"
                       ? "Stop the Paperclip service — press v"
                       : "Start Paperclip — press v")
@@ -1055,7 +1055,7 @@ Panel {
             spacing: Style.space(6)
 
             Repeater {
-              model: Model.hintKeys(service.report, service.quiet)
+              model: Model.hintKeys(service.report, service.quiet, service.servicePending)
 
               KeyHint {
                 required property var modelData

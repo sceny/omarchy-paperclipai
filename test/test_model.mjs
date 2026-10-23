@@ -611,8 +611,8 @@ group("the service row says what the report says and offers one thing", () => {
   // Agents at work: Stop asks once, and says how many.
   c = Model.serviceControl(running({ state: "working", working: 3 }), "")
   assert.deepEqual([c.action, c.confirm, c.working], ["stop", true, 3])
-  assert.equal(Model.stopConfirmText(3), "3 agents are at work — press again to stop")
-  assert.equal(Model.stopConfirmText(1), "1 agent is at work — press again to stop")
+  assert.equal(Model.stopConfirmText(3), "3 agents at work — press again")
+  assert.equal(Model.stopConfirmText(1), "1 agent at work — press again")
 
   // Started in a terminal: no Stop is offered, because none exists.
   c = Model.serviceControl(running({ state: "working", working: 2, service: { installed: false } }), "")
@@ -666,6 +666,14 @@ group("the footer offers the service key only when it does something", () => {
   assert.ok(!keys({ state: "idle", reachable: true, service: { installed: false } }).includes("v"))
   assert.equal(label({ state: "idle", reachable: true, service: managed }), "stop")
   assert.equal(label({ state: "stopped", reachable: false, service: { installed: true, active: false }, cli: { installed: true } }), "start")
+
+  // While a start or stop is under way, neither the key nor the card offers it again.
+  const down = { state: "stopped", reachable: false, service: { installed: true, active: false } }
+  for (const pending of ["start", "stop"]) {
+    assert.ok(!Model.hintKeys(down, null, pending).some((h) => h.key === "v"), pending)
+    assert.equal(Model.primaryAction(down, pending), null, pending)
+  }
+  assert.equal(Model.primaryAction(down, "").id, "start")
 })
 
 console.log("all groups passed")

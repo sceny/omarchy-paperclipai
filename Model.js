@@ -410,7 +410,7 @@ function statTiles(report) {
 // `s` is snooze while there is an inbox, and set-up while there is no Paperclip
 // yet. Those two states never overlap: an instance that is not installed has no
 // inbox to snooze.
-function hintKeys(report, quiet) {
+function hintKeys(report, quiet, pending) {
   var r = report || emptyReport()
   var state = String(r.state || "")
   var rows = r.needs || []
@@ -436,7 +436,7 @@ function hintKeys(report, quiet) {
   if (mode === "focus") hints.push({ key: "p", label: "end focus" })
   else if (mode === "omarchy") hints.push({ key: "p", label: "focus" })
 
-  var control = serviceControl(r, "")
+  var control = serviceControl(r, pending)
   if (control.action !== "") hints.push({ key: "v", label: control.action })
 
   hints.push({ key: "r", label: "refresh" })
@@ -446,13 +446,15 @@ function hintKeys(report, quiet) {
 }
 
 // What the big button in the panel should do about a broken instance.
-function primaryAction(report) {
+function primaryAction(report, pending) {
   if (!report) return null
   var state = String(report.state || "")
   if (state === "not-installed") {
     return { id: "setup", label: "Set up Paperclip", detail: "Install the CLI and start the instance" }
   }
   if (state === "stopped") {
+    // A start or stop already under way is not offered a second time.
+    if (String(pending || "") !== "") return null
     var service = report.service || {}
     if (service.installed) {
       return { id: "start", label: "Start Paperclip", detail: "Start the background service" }
@@ -555,7 +557,7 @@ function settlePending(pending, report) {
 // The words on the Stop button while it waits for the second press.
 function stopConfirmText(working) {
   var n = toCount(working)
-  return n + " agent" + (n === 1 ? " is" : "s are") + " at work — press again to stop"
+  return n + " agent" + (n === 1 ? "" : "s") + " at work — press again"
 }
 
 // ---------------------------------------------------------------- snooze

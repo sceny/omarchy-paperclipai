@@ -163,6 +163,7 @@ Item {
   // turn into a restart loop nobody asked for.
   function maybeAutoStart() {
     if (!autoStart || _stoppedByUser || instanceState !== "stopped") return
+    if (servicePending !== "" || serviceProcess.running) return
     var service = report.service || {}
     if (!service.installed) return
     var now = Date.now()
