@@ -272,16 +272,23 @@ same for any commit once the workflow is on `main`.
 ## Regression in the rig
 
 Panel QA runs the whole plugin in the sandbox, on the candidate: the head of
-`develop` after the release pull request is merged, by its full SHA:
+`develop` after the release pull request is merged, by its full SHA. The
+command is the one shared with Devices, run from a checkout of
+`sceny/omarchy-devices`:
 
 ```bash
-dev/sandbox run sceny/omarchy-paperclipai <sha> --steps tests,rig,script --script regression.sh
+dev/regression <sha> --repo sceny/omarchy-paperclipai
 ```
 
+It reads `dev/regression.json` at that commit: the checks script
+(`dev/regression.sh`), the sandbox steps (the tests, `dev/rig ci` and the
+script), the marketplace check, which runs here, and the rows the owner judges.
+It runs `dev/sandbox run` with those steps and writes the record from what they
+measured. Exit 0 is PASS, 1 is FAIL, 2 is NOT PASS (rows not yet checked).
+
 The tests run, `dev/rig ci` runs its checks, and the script runs with a rig up
-and drives the feature passes (`dev/rig seed`, `dev/rig screenshot`, the panel
-over IPC); it writes its evidence under `$SANDBOX_OUT`, which the run brings out
-as data. While writing or debugging the script, a `dev/sandbox dev start --repo
+and writes its rows under `$SANDBOX_OUT`, which the run brings out as data.
+While writing or debugging the script, a `dev/sandbox dev start --repo
 sceny/omarchy-paperclipai` session on a checkout of that SHA does the same
 interactively; the record is the `run`.
 Every feature gets
@@ -334,11 +341,9 @@ owner has done it or waived it, and the go waits for it.
 
 ## Cold install and upgrade
 
-Both start from the tag that is live now (`git tag`, the latest `vX.Y.Z` on
-`main`). Plugin DevOps runs them in the sandbox and Panel QA passes them: the
-cold install in `dev/sandbox run` on the candidate's SHA (`--steps script`), the
-upgrade in a `dev/sandbox dev` session, which holds the live tag beside the
-candidate's tree (`dev sync --tree DIR --as live`).
+Both are rows of `dev/regression.sh`, measured in the sandbox on the candidate's
+SHA with the rest of R3. The upgrade starts from the tag that is live now
+(`git tag`, the latest `vX.Y.Z` on `main`).
 
 **Cold install.** The sandbox's rig starts with an empty HOME, no state directory, no
 token and none of the plugin's skills: that is a cold computer. Run
@@ -347,13 +352,16 @@ user's one step, and no package is asked for twice. Each step is a row with its
 evidence, and what the rig cannot prove goes on the *needs the owner's setup*
 list.
 
-**Upgrade.** Install the live tag in the sandbox's rig with a state directory that holds
-a snooze state, then move to the candidate. The old state reads back unchanged,
-nothing is written until the user changes something, and the shell answers over
-IPC after the restart: a QML error takes the whole widget off the bar, and it
-can be logged after a quick log check has already passed.
+**Upgrade.** The live tag's own snooze writer makes the state an older install
+leaves; it is kept as `test/fixtures/snooze-v0.2.0.json` and regenerated only
+when the writer's format changes. The candidate's `snooze get` reads it back
+unchanged, and reading it writes nothing. This checks the state the tag left,
+not the tag's code running an upgrade: a live-tag install in the sandbox is not
+automated yet. Then `dev/loaded-code` checks that the shell answers over IPC
+with the candidate's files: a QML error takes the whole widget off the bar, and
+it can be logged after a quick log check has already passed.
 
-Both results go into the regression record as rows.
+Each result is a row of the regression record.
 
 ## Security review of the release
 
