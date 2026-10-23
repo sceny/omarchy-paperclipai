@@ -37,6 +37,14 @@ Panel {
   readonly property string badgeLabel: service.showCount ? Model.badgeText(service.report) : ""
   readonly property real badgeLane: !asleep && badgeLabel !== "" ? Style.space(10) : 0
 
+  // The lane as drawn. The slot and the mark's offset both follow this one
+  // value, so they glide together rather than the mark stepping first.
+  property real shownLane: badgeLane
+  Behavior on shownLane {
+    enabled: root.motion
+    NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+  }
+
   // Identical rows collapse into one, so a watchdog looping every fifteen
   // minutes reads as "Kai run failed ×115" rather than as a hundred rows.
   // The summary cards filter what the lists show, nothing else: the inbox
@@ -273,12 +281,7 @@ Panel {
     tooltipText: Model.tooltipText(service.report, service.quiet)
     active: !root.asleep && (service.attention > 0 || service.trouble)
     dimmed: root.asleep || service.instanceState === "idle" || service.instanceState === "unknown"
-    slotSize: Style.bar.iconSlot + root.badgeLane
-
-    Behavior on slotSize {
-      enabled: root.motion
-      NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-    }
+    slotSize: Style.bar.iconSlot + root.shownLane
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) service.openBoard()
@@ -299,7 +302,7 @@ Panel {
           // it, so the mark is as tall as they are rather than as tall as
           // the whole icon canvas.
           anchors.centerIn: parent
-          anchors.horizontalCenterOffset: -root.badgeLane / 2
+          anchors.horizontalCenterOffset: -root.shownLane / 2
           width: Style.bar.iconFont * 0.9
           height: Style.bar.iconFont * 0.9
           thickness: 24
