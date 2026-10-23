@@ -33,7 +33,7 @@ only inside it, on its own image with a throwaway Paperclip instance
    comes with its test.
 5. Never test against your own live desktop or live Paperclip instance, and
    never run the rig on the host. Use the sandbox. A session is always stopped
-   (`dev/sandbox dev stop`, then `dev/sandbox verify-clean`).
+   (`dev/sandbox dev --session <id> stop`, then `dev/sandbox verify-clean`).
 6. Never leave an install on a feature branch for a live check; the
    `follow-develop` timer then stops following. Use the sandbox's rig.
 7. Nothing private in the repository, a commit or a pull request: no tokens,
@@ -76,7 +76,7 @@ dev/sandbox dev up                                       # the rig: the plugin e
 dev/sandbox dev rig check                                # then: seed, restart-shell, ... (see README)
 dev/sandbox dev rig exec -- dev/loaded-code <plugin folder>  # after every shell restart: exit 0; 1 means restart the shell
 dev/sandbox dev shot NAME; dev/sandbox dev pull --out DIR  # screenshots out, as data
-dev/sandbox dev stop --all; dev/sandbox verify-clean     # always
+dev/sandbox dev --session <id> stop; dev/sandbox verify-clean     # always
 ```
 
 `dev/sandbox` is run from a `sceny/omarchy-devices` checkout. `dev sync` refuses
