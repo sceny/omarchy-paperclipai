@@ -181,8 +181,9 @@ dev/rig ci                     # up, run every check, tear down, verify. One com
 
 dev/rig up                     # bring the rig up, hidden, and leave it running
 dev/rig check                  # run the checks against the running rig
+dev/rig install                # add and enable the plugin on the bar (for a panel by hand)
 dev/rig screenshot shot.png    # capture the nested shell (works hidden)
-dev/rig seed                   # one inbox row each of failed_run, review, interaction, blocker
+dev/rig seed                   # inbox rows of each kind, and two live worker runs
 dev/rig restart-shell          # restart only the nested shell; needed after a .js change
 dev/rig exec -- omarchy plugin list    # run any command inside the sandbox
 dev/rig logs shell             # shell | compositor | instance | keeper | stubs
@@ -196,6 +197,17 @@ dev/rig selftest               # test the lease, keeper, ps and reap; needs no c
 
 `ci` writes its evidence (one log per check, plus `nested-shell.png`) to
 `.rig-evidence/` and exits non-zero if any check or the teardown proof fails.
+
+For a busy panel by hand, run `up`, then `install` (`up` does not put the plugin
+on the bar), then `seed`, then the screenshot or the panel check. `check`
+restarts the throwaway instance, which ends the worker runs `seed` started; a
+`seed` after a `check` starts them again, and the plugin stays installed.
+`check` needs a rig where the plugin is not installed (its cold-install step),
+so run it on a rig of its own, not after `install`. Run the nested shell's
+commands through `dev/rig exec`, for example
+`dev/rig exec -- omarchy-shell paperclip status`. A bare `omarchy-shell` in your
+own terminal does not have the rig's environment and prints `OMARCHY_PATH is not
+set`.
 
 ### Hidden by default
 
