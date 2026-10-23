@@ -42,7 +42,7 @@ Panel {
   property real shownLane: badgeLane
   Behavior on shownLane {
     enabled: root.motion
-    NumberAnimation { duration: 6000; easing.type: Easing.OutCubic }
+    NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
   }
 
   // Identical rows collapse into one, so a watchdog looping every fifteen
