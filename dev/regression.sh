@@ -63,6 +63,21 @@ fi
 row "Snooze read is not a write" "Reading the state writes nothing" \
   "the file's hash before and after two reads" "$unchanged" "snooze-get.out"
 
+# A known-bad state: the comparison above must tell it apart from the fixture,
+# or the rows before it prove nothing.
+planted="$work/planted"
+mkdir -p "$planted/omarchy/paperclipai"
+jq '.until += 1' "$fixture" >"$planted/omarchy/paperclipai/snooze.json"
+caught=fail
+if dev/rig exec -- env XDG_STATE_HOME="$planted" bin/omarchy-paperclip-snooze get \
+  >"$OUT_DIR/planted-snooze.out" 2>"$OUT_DIR/planted-snooze.err" &&
+  [[ $(sha256sum <"$OUT_DIR/planted-snooze.out") != "$(sha256sum <"$fixture")" ]]; then
+  caught=pass
+fi
+[[ $caught == pass ]] || failed=1
+row "Planted failure is caught" "A state with one value changed does not read back as the fixture" \
+  "snooze get on the v0.2.0 file with until plus one, compared with the fixture" "$caught" "planted-snooze.out"
+
 # Setup runs the server in the foreground under --no-service, so it is started
 # in its own process group and stopped once its health answers.
 cold="$work/cold-home"
