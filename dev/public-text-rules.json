@@ -137,6 +137,7 @@
       },
       {
         "id": "later",
+        "unless_line": "\\b\\d+\\s*(?:ms|s|sec|min|h|days?)\\s+later\\b",
         "regex": "\\b(?:in|at|until|to|for)\\s+(?:a\\s+|the\\s+)?later\\b|\\blater\\s*(?:[.,;:)!?]|—|-\\s|$)|\\b(?:done|handled|fixed|checked|added|look(?:ed)?(?:\\s+at)?|decided?|do|dealt|revisit(?:ed)?|come\\s+back)\\s+(?:it\\s+|this\\s+)?later\\b"
       },
       {
@@ -146,6 +147,14 @@
       {
         "id": "out-of-scope",
         "regex": "\\bout\\s+of\\s+scope\\b"
+      },
+      {
+        "id": "tracked-elsewhere",
+        "regex": "\\btracked\\s+(?:separately|on\\s+its\\s+own\\s+issue)\\b"
+      },
+      {
+        "id": "still-to",
+        "regex": "\\bstill\\s+to\\b"
       }
     ],
     "reference": "(?:[\\w.-]+/[\\w.-]+)?#\\d+|https?://github\\.com/[\\w.-]+/[\\w.-]+/(?:issues|pull)/\\d+"

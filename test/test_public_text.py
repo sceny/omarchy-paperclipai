@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "..")
@@ -167,6 +168,9 @@ class OpenItems(unittest.TestCase):
             "Handled in a later release.",
             "TODO: the second page.",
             "Out of scope here.",
+            "Tracked separately, in the next release.",
+            "The fold is tracked on its own issue.",
+            "Still to write the fold test.",
             "- Fine.\n- The fold is not covered.\n- Fine too.",
             "Verdict: pass.\n\nNot blocking, for later: the ellipsis re-flows.",
         ]:
@@ -197,6 +201,7 @@ class OpenItems(unittest.TestCase):
     def test_words_that_are_not_a_leftover_pass(self):
         for text in [
             "A later change keeps the old keys.",
+            "The next read 10 s later, because a doctor read was dropped.",
             "The later head is read again.",
             "Not checked in a running shell: the merge waits for someone to check it there.",
             "All of it is checked.",
@@ -287,6 +292,79 @@ class WholePullRequest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
 
+class Sources(unittest.TestCase):
+    """Where the texts come from: a pull request's title and commits, a comment on it, and a push to develop."""
+    REPO = "sceny/omarchy-paperclipai"
+    URL = "https://github.com/sceny/omarchy-paperclipai/pull/62"
+    TITLE = "Regression: a planted failure is caught by a row of its own (SCE-741)"
+    SQUASH = "All 94 tests pass. The planted failure is caught by its own row."
+    COMMIT_URL = "https://github.com/sceny/omarchy-paperclipai/commit/ec22112"
+    PR = {"html_url": URL, "title": TITLE, "body": "Clean body.", "number": 62, "updated_at": "2026-10-17T00:19:37Z"}
+
+    def fake_api(self, responses):
+        def api(path, token):
+            key = path.split("?")[0]
+            return responses.get(key, [])
+        return api
+
+    def read(self, responses, commits=True):
+        with mock.patch.object(ptc, "api", self.fake_api(responses)):
+            return ptc.read_pull_request(self.REPO, 62, "token", commits=commits)
+
+    def push(self, responses):
+        with mock.patch.object(ptc, "api", self.fake_api(responses)):
+            return ptc.read_push(self.REPO, "aaa", "bbb", "token")
+
+    def test_the_title_is_read_and_its_task_id_fails(self):
+        doc = self.read({"/repos/%s/pulls/62" % self.REPO: self.PR})
+        self.assertIn({"url": self.URL, "body": self.TITLE}, doc["texts"])
+        self.assertIn((ENV, "task-id"), checks_of(doc))
+
+    def test_the_commit_messages_of_a_pull_request_are_read(self):
+        responses = {
+            "/repos/%s/pulls/62" % self.REPO: self.PR,
+            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
+        }
+        doc = self.read(responses)
+        self.assertIn({"url": self.COMMIT_URL, "body": self.SQUASH}, doc["texts"])
+        self.assertIn((ENV, "test-count"), checks_of(doc))
+
+    def test_a_push_to_develop_reads_the_commit_message_that_lands(self):
+        responses = {
+            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}]},
+            "/repos/%s/commits/aaa" % self.REPO: {"commit": {"committer": {"date": "2026-10-22T00:00:00Z"}}},
+            "/repos/%s/pulls" % self.REPO: [],
+        }
+        texts, _, docs = self.push(responses)
+        self.assertEqual(texts, [{"url": self.COMMIT_URL, "body": self.SQUASH}])
+        self.assertEqual(docs, [])
+
+    def test_a_push_to_develop_reads_the_comments_on_pull_requests_updated_since_before(self):
+        old = dict(self.PR, number=50, updated_at="2026-10-20T00:00:00Z", html_url="https://github.com/sceny/omarchy-paperclipai/pull/50")
+        new = dict(self.PR, number=62, updated_at="2026-10-23T09:00:00Z")
+        comment = {"html_url": "https://github.com/sceny/omarchy-paperclipai/pull/62#issuecomment-1", "body": "Not checked on the phone."}
+        responses = {
+            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": []},
+            "/repos/%s/commits/aaa" % self.REPO: {"commit": {"committer": {"date": "2026-10-22T00:00:00Z"}}},
+            "/repos/%s/pulls" % self.REPO: [new, old],
+            "/repos/%s/pulls/62" % self.REPO: new,
+            "/repos/%s/issues/62/comments" % self.REPO: [comment],
+        }
+        _, _, docs = self.push(responses)
+        self.assertEqual([doc["texts"][0]["url"] for doc in docs], [new["html_url"]])
+        self.assertIn((comment["html_url"], OPEN, "not-checked"),
+                      [(url, c, r) for url, c, r, _ in ptc.check_pull_request(RULES, docs[0])])
+
+    def test_a_comment_on_a_pull_request_names_its_number(self):
+        self.assertEqual(ptc.pull_request_number({"issue": {"number": 301, "pull_request": {"url": "x"}}}), 301)
+        self.assertEqual(ptc.pull_request_number({"pull_request": {"number": 7}}), 7)
+        self.assertIsNone(ptc.pull_request_number({"issue": {"number": 12}}))
+
+
+def checks_of(doc):
+    return {(check, rule) for _, check, rule, _ in ptc.check_pull_request(RULES, doc)}
+
+
 class Standing(unittest.TestCase):
     def test_the_standing_texts_pass(self):
         found = ptc.check_standing(RULES)
@@ -324,8 +402,13 @@ class Workflow(unittest.TestCase):
             self.text = handle.read()
 
     def test_it_runs_on_the_events_that_carry_public_text(self):
-        for event in ("pull_request:", "pull_request_review:", "pull_request_review_comment:"):
+        for event in ("pull_request:", "pull_request_review:", "pull_request_review_comment:", "issue_comment:"):
             self.assertIn("\n  " + event, self.text)
+
+    def test_a_push_to_develop_reads_what_lands_and_a_comment_after_the_merge(self):
+        self.assertRegex(self.text, r"(?m)^  push:\n    branches: \[develop\]$")
+        self.assertIn("github.event.issue.pull_request", self.text)
+        self.assertIn("cancel-in-progress: ${{ github.event_name != 'push' }}", self.text)
 
     def test_it_reads_with_a_read_only_token(self):
         self.assertIn("pull-requests: read", self.text)

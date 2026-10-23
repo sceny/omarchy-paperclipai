@@ -1,12 +1,13 @@
 name: public-text
 
 # The company's rules for public text, checked by a script (dev/public-text-check):
-# a pull request's body, comments, reviews and review comments name no setup of
-# ours, leave nothing open without an issue and name no other repository's issue
-# without its owner. Every run reads all of them again through the API, so a
-# plain comment (an issue_comment run takes effect only from the default branch)
-# is read on the next run of any event below. The review events run from the
-# pull request's merge ref, so this file works before a release reaches main.
+# a pull request's title, body, commit messages, comments, reviews and review
+# comments name no setup of ours, leave nothing open without an issue and name no
+# other repository's issue without its owner. A push to develop reads the commit
+# messages it brings and every pull request it touched, so a comment after the
+# merge and a squash message that lands are checked too. The pull request events
+# run from the merge ref, so this file works before a release reaches main; an
+# issue_comment run and a schedule take effect only from the default branch.
 
 on:
   pull_request:
@@ -15,17 +16,22 @@ on:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
     types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited]
+  push:
+    branches: [develop]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: public-text-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: public-text-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   public-text:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
