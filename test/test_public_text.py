@@ -299,7 +299,7 @@ class Sources(unittest.TestCase):
     TITLE = "Regression: a planted failure is caught by a row of its own (SCE-741)"
     SQUASH = "All 94 tests pass. The planted failure is caught by its own row."
     COMMIT_URL = "https://github.com/sceny/omarchy-paperclipai/commit/ec22112"
-    PR = {"html_url": URL, "title": TITLE, "body": "Clean body.", "number": 62, "updated_at": "2026-10-17T00:19:37Z"}
+    PR = {"html_url": URL, "title": TITLE, "body": "Clean body.", "number": 62, "state": "open", "updated_at": "2026-10-17T00:19:37Z"}
 
     def fake_api(self, responses):
         def api(path, token):
@@ -328,6 +328,16 @@ class Sources(unittest.TestCase):
         doc = self.read(responses)
         self.assertIn({"url": self.COMMIT_URL, "body": self.SQUASH}, doc["texts"])
         self.assertIn((ENV, "test-count"), checks_of(doc))
+
+    def test_a_comment_on_a_closed_pull_request_does_not_reread_its_commits(self):
+        responses = {
+            "/repos/%s/pulls/62" % self.REPO: dict(self.PR, state="closed"),
+            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
+        }
+        doc = self.read(responses)
+        self.assertIn({"url": self.URL, "body": self.TITLE}, doc["texts"])
+        self.assertNotIn(self.COMMIT_URL, [text["url"] for text in doc["texts"]])
+        self.assertNotIn((ENV, "test-count"), checks_of(doc))
 
     def test_a_push_to_develop_reads_the_commit_message_that_lands(self):
         responses = {

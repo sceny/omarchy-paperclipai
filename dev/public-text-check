@@ -281,7 +281,7 @@ def read_pull_request(repo, number, token, commits=True):
     base = "/repos/%s" % repo
     pr = api("%s/pulls/%d" % (base, number), token)
     texts = [{"url": pr["html_url"], "body": pr["title"]}, {"url": pr["html_url"], "body": pr.get("body")}]
-    if commits:
+    if commits and pr["state"] == "open":
         for item in api("%s/pulls/%d/commits?per_page=100" % (base, number), token):
             texts.append({"url": item["html_url"], "body": item["commit"]["message"]})
     for kind in ("issues/%d/comments", "pulls/%d/reviews", "pulls/%d/comments"):
