@@ -230,11 +230,31 @@ rig_pc_live_runs() {
     jq -r '[.[] | select(.status == "running")] | length'
 }
 
+rig_pc_agent_live_runs() {
+  # Queued or running runs of one agent.
+  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
+    jq -r --arg a "$2" '[.[] | select(.agentId == $a and (.status == "running" or .status == "queued"))] | length'
+}
+
+rig_pc_retire_tasks() {
+  # Cancels the open tasks with this title. After an instance restart Paperclip
+  # will not run the same task again (a wakeup is skipped as
+  # execution_reconciliation_required), so a stale worker task has to be replaced.
+  local company=$1 title=$2 ids id
+  ids=$(rig_pc_api GET "/api/companies/$company/issues?limit=100" |
+    jq -r --arg t "$title" '.[] | select(.title == $t and .status != "done" and .status != "cancelled") | .id') || return 1
+  for id in $ids; do
+    rig_pc_api PATCH "/api/issues/$id" '{"status": "cancelled"}' >/dev/null || return 1
+  done
+}
+
 rig_pc_seed_workers() {
   # Each worker is a process agent that sleeps for an hour, so its run is live
-  # for as long as the rig is. Assigning its task wakes it. A task that
-  # already has a live run is left alone, which keeps a second seed quiet.
-  local company=$1 spec name title agent task
+  # for as long as the rig is. Assigning a task starts a run. A worker with no
+  # live run gets a fresh task, which is how a seed after a check (which
+  # restarts the instance) brings the workers back; a second seed while they
+  # run changes nothing.
+  local company=$1 spec name title agent
   for spec in "${RIG_SEED_WORKERS[@]}"; do
     name=${spec%%|*}
     title=${spec#*|}
@@ -246,8 +266,10 @@ rig_pc_seed_workers() {
         adapterConfig: {command: "sleep", args: ["3600"], timeoutSec: 0},
         runtimeConfig: {heartbeat: {enabled: false}}}')" | jq -r '.id') ||
       rig_die "seed: could not create agent $name"
-    task=$(rig_seed_issue "$company" "$title" \
-      "$(jq -nc --arg a "$agent" '{status: "todo", assigneeAgentId: $a}')") ||
+    (($(rig_pc_agent_live_runs "$company" "$agent") == 0)) || continue
+    rig_pc_retire_tasks "$company" "$title" || rig_die "seed: could not retire the old task '$title'"
+    rig_pc_api POST "/api/companies/$company/issues" "$(jq -nc --arg t "$title" --arg a "$agent" \
+      '{title: $t, status: "todo", assigneeAgentId: $a}')" >/dev/null ||
       rig_die "seed: could not create task '$title'"
   done
 

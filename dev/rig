@@ -9,7 +9,8 @@
 #   dev/rig check                        run the checks against a running rig
 #   dev/rig status                       what is running, and where
 #   dev/rig screenshot [file.png]        capture the nested shell (works hidden)
-#   dev/rig seed                         one inbox row of each kind in the throwaway instance
+#   dev/rig seed                         one inbox row of each kind, and live worker runs
+#   dev/rig install                      add and enable the plugin on the bar (check starts without it)
 #   dev/rig restart-shell                restart only the nested shell (after a .js change)
 #   dev/rig show | hide                  put the rig on the owner's screen / take it off again
 #   dev/rig ps [--json]                  every live rig: owner, age, time left
@@ -219,7 +220,9 @@ cmd_up() {
   cat >&2 <<INFO
 
   Next:
-    dev/rig check                  run the checks
+    dev/rig install                add the plugin to the bar
+    dev/rig seed                   a busy panel: live runs and inbox rows
+    dev/rig check                  run the checks (they expect no plugin yet)
     dev/rig screenshot shot.png    capture the shell (works while hidden)
     dev/rig exec -- omarchy plugin list
     dev/rig down                   tear it down
@@ -542,6 +545,35 @@ cmd_seed() {
   rig_pc_seed
 }
 
+# ------------------------------------------------------------------ install ----
+
+cmd_install() {
+  # Puts the plugin on the bar, for a screenshot or a panel check by hand. The
+  # install is the one `check` makes; `check` starts from a rig without the plugin.
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
+  rig_export_env
+  rig_guard_sandbox
+  rig_guard_nested_display
+  rig_guard_nested_shell
+  rig_guard_no_host_systemd
+  rig_guard_stubs
+
+  if [[ -f $RIG_PLUGINS_DIR/$RIG_PLUGIN_ID/manifest.json ]]; then
+    rig_ok "$RIG_PLUGIN_ID is already installed"
+  else
+    rig_record install-add 0 omarchy plugin add "file://$RIG_PKG_REPO" --yes ||
+      rig_die "install: 'omarchy plugin add' failed; see $RIG_EVIDENCE/install-add.log"
+  fi
+
+  if omarchy plugin list --json | jq -e --arg id "$RIG_PLUGIN_ID" 'any(.[]; .id == $id and .enabled == true)' >/dev/null 2>&1; then
+    rig_ok "$RIG_PLUGIN_ID is already enabled"
+  else
+    rig_record_settled install-enable 0 omarchy plugin enable "$RIG_PLUGIN_ID" "$RIG_BAR_SECTION" ||
+      rig_die "install: 'omarchy plugin enable' failed; see $RIG_EVIDENCE/install-enable.log"
+  fi
+  rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar"
+}
+
 # ------------------------------------------------------------------- adopt ----
 
 cmd_adopt() {
@@ -627,6 +659,7 @@ show) cmd_view visible ;;
 hide) cmd_view hidden ;;
 restart-shell) cmd_restart_shell "$@" ;;
 seed) cmd_seed "$@" ;;
+install) cmd_install "$@" ;;
 ps) cmd_ps "$@" ;;
 reap) cmd_reap "$@" ;;
 adopt) cmd_adopt "$@" ;;
