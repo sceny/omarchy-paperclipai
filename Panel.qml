@@ -31,6 +31,12 @@ Panel {
   // hides the inbox.
   readonly property bool asleep: service.quiet.quiet
 
+  // The count the bubble shows, "" when it shows none. While one is up the
+  // bar slot is widened by a lane of its own, so the digits sit beside the
+  // mark and never on it.
+  readonly property string badgeLabel: service.showCount ? Model.badgeText(service.report) : ""
+  readonly property real badgeLane: !asleep && badgeLabel !== "" ? Style.space(10) : 0
+
   // Identical rows collapse into one, so a watchdog looping every fifteen
   // minutes reads as "Kai run failed ×115" rather than as a hundred rows.
   // The summary cards filter what the lists show, nothing else: the inbox
@@ -267,6 +273,12 @@ Panel {
     tooltipText: Model.tooltipText(service.report, service.quiet)
     active: !root.asleep && (service.attention > 0 || service.trouble)
     dimmed: root.asleep || service.instanceState === "idle" || service.instanceState === "unknown"
+    slotSize: Style.bar.iconSlot + root.badgeLane
+
+    Behavior on slotSize {
+      enabled: root.motion
+      NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+    }
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) service.openBoard()
@@ -287,6 +299,7 @@ Panel {
           // it, so the mark is as tall as they are rather than as tall as
           // the whole icon canvas.
           anchors.centerIn: parent
+          anchors.horizontalCenterOffset: -root.badgeLane / 2
           width: Style.bar.iconFont * 0.9
           height: Style.bar.iconFont * 0.9
           thickness: 24
@@ -304,9 +317,9 @@ Panel {
     }
 
     // The icon canvas the stock widgets draw in. The bubble and the zzz hang
-    // from its top edge, so they never rise above the icons beside them; they
-    // reach a little past its right edge, into the button's own padding, so
-    // they sit beside the narrow mark instead of on top of it.
+    // from its top edge, so they never rise above the icons beside them. The
+    // zzz reaches a little past its right edge, into the button's padding; a
+    // count sits in the lane the slot widens by (badgeLane).
     Item {
       id: iconBox
       anchors.centerIn: parent
@@ -335,16 +348,22 @@ Panel {
     // simply busy, nothing at all when there is nothing to say.
     Rectangle {
       id: bubble
-      visible: !root.asleep && (badge.text !== "" || dotVisible)
-      readonly property bool dotVisible: badge.text === "" &&
+      visible: !root.asleep && (root.badgeLabel !== "" || dotVisible)
+      readonly property bool dotVisible: root.badgeLabel === "" &&
         (service.working > 0 || service.attention > 0 || service.trouble)
-      width: badge.text !== "" ? Math.max(Style.space(10), badge.implicitWidth + Style.space(4)) : Style.space(5)
-      height: badge.text !== "" ? Style.space(10) : Style.space(5)
+      // The ring is the bar's own background, so where the bubble overlaps
+      // the mark (it can, beside a two-digit count) an edge of bar shows
+      // between them, even when both are the urgent red.
+      readonly property int ring: 1
+      width: root.badgeLabel !== "" ? Math.max(height, badge.implicitWidth + Style.space(4) + 2 * ring) : Style.space(5) + 2 * ring
+      height: root.badgeLabel !== "" ? Style.space(12) + 2 * ring : Style.space(5) + 2 * ring
       radius: height / 2
       color: root.badgeUrgent ? root.urgent : (root.bar ? root.bar.barForeground : root.foreground)
-      anchors.right: iconBox.right
-      anchors.rightMargin: -Style.space(4)
+      border.width: ring
+      border.color: root.bar ? root.bar.background : root.panelBackground
       anchors.top: iconBox.top
+      x: root.badgeLabel !== "" ? button.width - width - Style.space(1)
+                                : iconBox.x + iconBox.width + Style.space(4) - width
 
       Behavior on color {
         enabled: root.motion
@@ -363,10 +382,10 @@ Panel {
         id: badge
         anchors.centerIn: parent
         textFormat: Text.PlainText
-        text: service.showCount ? Model.badgeText(service.report) : ""
+        text: root.badgeLabel
         color: root.bar ? root.bar.background : root.panelBackground
         font.family: root.fontFamily
-        font.pixelSize: Math.max(7, Style.font.caption - 2)
+        font.pixelSize: Math.max(8, Style.font.caption)
         font.bold: true
         renderType: Text.NativeRendering
 
