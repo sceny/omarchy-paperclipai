@@ -72,6 +72,16 @@ Item {
   property string _lastMode: "awake"
   property bool _snoozeLoaded: false
 
+  // What the panel just asked the service to do ("start" or "stop") until the
+  // report shows it came true; and whether the first press of Stop on an
+  // instance with agents at work is waiting for its second.
+  property string servicePending: ""
+  property bool stopArmed: false
+  readonly property var serviceControl: Model.serviceControl(report, servicePending)
+  // A person stopped it. Auto-start must not undo that for the rest of this
+  // session; the next start of the shell is a new session.
+  property bool _stoppedByUser: false
+
   property var _seenKeys: ({})
   property var _previousReport: null
   property double _lastStartAttempt: 0
@@ -143,13 +153,17 @@ Item {
     }
     _previousReport = parsed
     report = parsed
+    servicePending = Model.settlePending(servicePending, parsed)
+    if (servicePending === "") pendingTimer.stop()
+    if (serviceControl.action !== "stop") stopArmed = false
     maybeAutoStart()
   }
 
   // One attempt per ten minutes: an instance that refuses to start must not
   // turn into a restart loop nobody asked for.
   function maybeAutoStart() {
-    if (!autoStart || instanceState !== "stopped") return
+    if (!autoStart || _stoppedByUser || instanceState !== "stopped") return
+    if (servicePending !== "" || serviceProcess.running) return
     var service = report.service || {}
     if (!service.installed) return
     var now = Date.now()
@@ -197,10 +211,14 @@ Item {
   }
 
   function run(action, url) {
+    if (action === "start") {
+      startService()
+      return
+    }
     var argv = actionArgv(action, url || "")
     if (argv.length === 0) return
     Util.execArgv(argv)
-    if (action === "start" || action === "webapp") settleTimer.restart()
+    if (action === "webapp") settleTimer.restart()
   }
 
   function openUrl(url, newWindow) {
@@ -212,7 +230,79 @@ Item {
   function runSetup() { run("setup") }
   function runDoctor() { run("doctor") }
   function ensureWebapp() { run("webapp") }
-  function startInstance() { run("start") }
+  function startInstance() { startService() }
+
+  // ------------------------------------------------------- start and stop
+  //
+  // Both go through bin/omarchy-paperclip-service, which knows whether the
+  // instance is a background service or a terminal run. The panel offers only
+  // what Model.serviceControl says is possible, and the answer is read back
+  // from the probe, not assumed.
+
+  function startService() {
+    var control = serviceControl
+    if (control.action !== "start") return refuseService(control)
+    if (serviceProcess.running) return "busy"
+    _stoppedByUser = false
+    stopArmed = false
+    beginService(true)
+    return "starting"
+  }
+
+  // Stopping an instance with agents at work asks once: the first call arms
+  // and returns "confirm", the second (within a few seconds) stops.
+  function stopService() {
+    var control = serviceControl
+    if (control.action !== "stop") return refuseService(control)
+    if (serviceProcess.running) return "busy"
+    if (control.confirm && !stopArmed) {
+      stopArmed = true
+      stopArmTimer.restart()
+      return "confirm"
+    }
+    stopArmed = false
+    stopArmTimer.stop()
+    _stoppedByUser = true
+    beginService(false)
+    return "stopping"
+  }
+
+  // The one key and the one button: whatever the service can do right now.
+  function toggleService() {
+    var offered = serviceControl.action
+    if (offered === "start") return startService()
+    if (offered === "stop") return stopService()
+    return refuseService(serviceControl)
+  }
+
+  function refuseService(control) {
+    if (control.detail !== "") say(control.label + " — " + control.detail)
+    return control.state
+  }
+
+  function beginService(starting) {
+    servicePending = starting ? "start" : "stop"
+    pendingTimer.restart()
+    say(starting ? "Starting Paperclip…" : "Stopping Paperclip…")
+    serviceProcess.command = starting ? [serviceScript, "start", "--quiet"]
+                                      : [serviceScript, "stop", "--quiet"]
+    serviceProcess.running = true
+    settleTimer.restart()
+  }
+
+  function finishService(exitCode) {
+    if (exitCode === 0) {
+      refresh()
+      return
+    }
+    // The script said why on stderr; that sentence is the whole answer.
+    var complaint = String(serviceErr.text || "").split("\n")[0]
+      .replace(/\u001b\[[0-9;]*m/g, "").replace(/^==>\s*/, "").trim()
+    servicePending = ""
+    pendingTimer.stop()
+    say(complaint !== "" ? complaint : "The service script failed (exit " + exitCode + ")")
+    refresh()
+  }
 
   function restartInstance() {
     actionStatus = "Restarting Paperclip…"
@@ -623,12 +713,28 @@ Item {
     onTriggered: {
       ticks += 1
       root.refresh()
-      if (ticks >= 8) {
+      if (ticks >= (root.servicePending !== "" ? 30 : 8)) {
         ticks = 0
         running = false
         root.actionStatus = ""
       }
     }
+  }
+
+  Timer {
+    // A pending start or stop that the report never confirmed is not shown
+    // for ever.
+    id: pendingTimer
+    interval: Model.SERVICE_PENDING_MS
+    repeat: false
+    onTriggered: root.servicePending = ""
+  }
+
+  Timer {
+    id: stopArmTimer
+    interval: 6000
+    repeat: false
+    onTriggered: root.stopArmed = false
   }
 
   Timer {
@@ -656,6 +762,14 @@ Item {
       onStarted: write(payload)
       onExited: destroy()
     }
+  }
+
+  Process {
+    id: serviceProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: serviceErr; waitForEnd: true }
+    onExited: function(exitCode) { root.finishService(exitCode) }
   }
 
   Process {

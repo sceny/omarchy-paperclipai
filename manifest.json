@@ -62,7 +62,7 @@
         "label": "Keep Paperclip running",
         "options": ["On", "Off"],
         "defaultValue": "On",
-        "description": "Start the background service again when the instance is found down (at most once every ten minutes)."
+        "description": "Start the background service again when the instance is found down (at most once every ten minutes). A stop from the panel keeps it stopped until the shell restarts."
       },
       {
         "key": "showCount",

@@ -45,7 +45,7 @@ Panel {
   property bool showAllRows: false
   readonly property var needs: showAllRows ? needGroups : needGroups.slice(0, needsCap)
   readonly property var moving: Model.filterMovingRows(service.report ? service.report.moving : [], activeFilter)
-  readonly property var action: Model.primaryAction(service.report)
+  readonly property var action: Model.primaryAction(service.report, service.servicePending)
   readonly property int rowCount: needs.length + moving.length
   readonly property var tiles: Model.statTiles(service.report)
   // How many open rows this list does not reach. Named, never hidden: a list
@@ -162,6 +162,7 @@ Panel {
       showAllRows = false
       cardFilter = ""
       retryArmed = false
+      service.stopArmed = false
       service.clearNotes()
       if (panelFlick) panelFlick.contentY = 0
       service.refresh()
@@ -250,6 +251,10 @@ Panel {
     function status(): string { return service.instanceState + " — " + (service.report ? service.report.summary : "") }
     function board(): string { service.openBoard(); return "ok" }
     function doctor(): string { service.runDoctor(); return "ok" }
+    function serviceState(): string { return service.serviceControl.state + (service.stopArmed ? " (confirm)" : "") }
+    function startService(): string { return service.startService() }
+    function stopService(): string { return service.stopService() }
+    function toggleService(): string { return service.toggleService() }
     function snooze(): string { service.toggleSnooze(false); return service.quiet.mode }
     function snoozeUntilMorning(): string { service.toggleSnooze(true); return service.quiet.mode }
     function focus(): string { service.toggleFocus(); return service.quiet.mode }
@@ -429,6 +434,7 @@ Panel {
         if (lower === "r") service.refresh()
         else if (lower === "o") service.openBoard()
         else if (lower === "d") service.runDoctor()
+        else if (lower === "v") service.toggleService()
         else if (lower === "n") service.cycleNotifications()
         else if (lower === "z") service.toggleSnooze(k === "Z")
         else if (lower === "p") service.toggleFocus()
@@ -556,6 +562,86 @@ Panel {
                   loops: Animation.Infinite
                   easing.type: Easing.InOutQuad
                 }
+              }
+            }
+          }
+
+          // ------------------------------------------------- the service
+          //
+          // Whether Paperclip itself is running, and the one button for it.
+          // The row is a fixed height, and the confirmation for stopping an
+          // instance with agents at work replaces its detail line in place,
+          // so asking never moves what is below.
+          Item {
+            id: serviceRow
+            readonly property var control: service.serviceControl
+            readonly property bool busy: control.state === "starting" || control.state === "stopping"
+            // The big card above the list already offers Start, and Enter
+            // reaches it; a second Start button would only repeat it.
+            readonly property bool cardOffersStart: control.action === "start" &&
+              root.action !== null && root.action.id === "start"
+            visible: control.state !== "unavailable"
+            width: parent.width
+            height: Style.space(26)
+            opacity: root.revealAt(1)
+            transform: Translate { y: root.revealLift(1) }
+
+            RowLayout {
+              anchors.fill: parent
+              anchors.leftMargin: Style.space(2)
+              spacing: Style.space(8)
+
+              Rectangle {
+                id: serviceDot
+                width: Style.space(6)
+                height: Style.space(6)
+                radius: width / 2
+                Layout.alignment: Qt.AlignVCenter
+                property real pulse: 0.9
+                color: serviceRow.control.state === "stopped" ? root.urgent : root.foreground
+                opacity: serviceRow.busy ? pulse : (serviceRow.control.state === "running" ? 0.9 : 0.65)
+
+                SequentialAnimation on pulse {
+                  running: root.motion && root.opened && serviceRow.busy
+                  loops: Animation.Infinite
+                  NumberAnimation { to: 0.25; duration: 700; easing.type: Easing.InOutQuad }
+                  NumberAnimation { to: 0.9; duration: 700; easing.type: Easing.InOutQuad }
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: serviceRow.control.label
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                Layout.alignment: Qt.AlignVCenter
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                text: service.stopArmed ? Model.stopConfirmText(serviceRow.control.working)
+                                        : serviceRow.control.detail
+                color: service.stopArmed ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              HeaderPill {
+                visible: serviceRow.control.action !== "" && !serviceRow.cardOffersStart
+                urgentPill: service.stopArmed
+                label: service.stopArmed ? "press again" : serviceRow.control.action
+                tooltip: service.stopArmed
+                  ? "Press again to stop Paperclip"
+                  : (serviceRow.control.action === "stop"
+                      ? "Stop the Paperclip service — press v"
+                      : "Start Paperclip — press v")
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: service.toggleService()
               }
             }
           }
@@ -969,7 +1055,7 @@ Panel {
             spacing: Style.space(6)
 
             Repeater {
-              model: Model.hintKeys(service.report, service.quiet)
+              model: Model.hintKeys(service.report, service.quiet, service.servicePending)
 
               KeyHint {
                 required property var modelData

@@ -410,7 +410,7 @@ function statTiles(report) {
 // `s` is snooze while there is an inbox, and set-up while there is no Paperclip
 // yet. Those two states never overlap: an instance that is not installed has no
 // inbox to snooze.
-function hintKeys(report, quiet) {
+function hintKeys(report, quiet, pending) {
   var r = report || emptyReport()
   var state = String(r.state || "")
   var rows = r.needs || []
@@ -436,6 +436,9 @@ function hintKeys(report, quiet) {
   if (mode === "focus") hints.push({ key: "p", label: "end focus" })
   else if (mode === "omarchy") hints.push({ key: "p", label: "focus" })
 
+  var control = serviceControl(r, pending)
+  if (control.action !== "") hints.push({ key: "v", label: control.action })
+
   hints.push({ key: "r", label: "refresh" })
   hints.push({ key: "d", label: "fix" })
   hints.push({ key: "n", label: "notify" })
@@ -443,13 +446,15 @@ function hintKeys(report, quiet) {
 }
 
 // What the big button in the panel should do about a broken instance.
-function primaryAction(report) {
+function primaryAction(report, pending) {
   if (!report) return null
   var state = String(report.state || "")
   if (state === "not-installed") {
     return { id: "setup", label: "Set up Paperclip", detail: "Install the CLI and start the instance" }
   }
   if (state === "stopped") {
+    // A start or stop already under way is not offered a second time.
+    if (String(pending || "") !== "") return null
     var service = report.service || {}
     if (service.installed) {
       return { id: "start", label: "Start Paperclip", detail: "Start the background service" }
@@ -469,6 +474,90 @@ function primaryAction(report) {
     return { id: "webapp", label: "Create the web app", detail: "Add Paperclip to the app launcher" }
   }
   return null
+}
+
+// ------------------------------------------------------------- the service
+//
+// What the panel says about the Paperclip process, and the one thing it offers
+// to do about it. The report is the truth: the probe reads the API and the
+// systemd unit. `pending` is only what this panel just asked for ("start" or
+// "stop"), so the row can say "starting" before the unit has moved; it is
+// dropped as soon as the report agrees (settlePending) or runs out of time.
+//
+//   running     the API answers
+//   stopped     it does not, and nothing is starting it
+//   starting    asked to start, or the unit is up and the API is not yet
+//   stopping    asked to stop, or the unit is shutting down
+//   unavailable not set up, or not ours: nothing to offer
+//
+// Stop is offered only for the background service. An instance started in a
+// terminal is that terminal's process, and the plugin does not fake a way to
+// end it. Stopping with agents at work asks once (`confirm`).
+var SERVICE_PENDING_MS = 90000
+
+function serviceControl(report, pending) {
+  var none = { state: "unavailable", label: "", detail: "", action: "", confirm: false, working: 0 }
+  if (!report) return none
+  var state = String(report.state || "")
+  if (state === "not-installed" || state === "untrusted-listener" || state === "unknown" || state === "") return none
+
+  var service = report.service || {}
+  var managed = service.installed === true
+  var unit = String(service.activeState || "")
+  var wanted = String(pending || "")
+  var working = toCount(report.working)
+  var reachable = report.reachable === true
+
+  if (reachable) {
+    if (wanted === "stop" || unit === "deactivating") {
+      return { state: "stopping", label: "Stopping", detail: "Waiting for Paperclip to shut down", action: "", confirm: false, working: working }
+    }
+    return {
+      state: "running",
+      label: "Running",
+      detail: managed ? "Background service" : "Started in a terminal — close that terminal to stop it",
+      action: managed ? "stop" : "",
+      confirm: managed && working > 0,
+      working: working
+    }
+  }
+
+  if (wanted === "stop" || unit === "deactivating") {
+    if (service.active === true || unit === "deactivating") {
+      return { state: "stopping", label: "Stopping", detail: "Waiting for Paperclip to shut down", action: "", confirm: false, working: 0 }
+    }
+  }
+  if (wanted === "start" || unit === "activating") {
+    return { state: "starting", label: "Starting", detail: "Waiting for Paperclip to answer", action: "", confirm: false, working: 0 }
+  }
+  if (service.active === true) {
+    return { state: "starting", label: "Starting", detail: "The service is up; Paperclip is not answering yet", action: "stop", confirm: false, working: 0 }
+  }
+  if (managed) {
+    return { state: "stopped", label: "Stopped", detail: "Background service", action: "start", confirm: false, working: 0 }
+  }
+  if (report.cli && report.cli.installed === true) {
+    return { state: "stopped", label: "Stopped", detail: "Starts in a terminal", action: "start", confirm: false, working: 0 }
+  }
+  return { state: "stopped", label: "Stopped", detail: "Finish the install first", action: "", confirm: false, working: 0 }
+}
+
+// Drop the pending ask once the report shows it came true.
+function settlePending(pending, report) {
+  var wanted = String(pending || "")
+  if (wanted === "" || !report) return wanted
+  var service = report.service || {}
+  var up = report.reachable === true
+  var unitUp = service.active === true || String(service.activeState || "") === "activating"
+  if (wanted === "start" && up) return ""
+  if (wanted === "stop" && !up && !unitUp) return ""
+  return wanted
+}
+
+// The words on the Stop button while it waits for the second press.
+function stopConfirmText(working) {
+  var n = toCount(working)
+  return n + " agent" + (n === 1 ? "" : "s") + " at work — press again"
 }
 
 // ---------------------------------------------------------------- snooze
@@ -877,6 +966,10 @@ if (typeof module !== "undefined" && module.exports) {
     statTiles: statTiles,
     hintKeys: hintKeys,
     primaryAction: primaryAction,
+    SERVICE_PENDING_MS: SERVICE_PENDING_MS,
+    serviceControl: serviceControl,
+    settlePending: settlePending,
+    stopConfirmText: stopConfirmText,
     diffNotifications: diffNotifications,
     neutralizeOption: neutralizeOption,
     escapeMarkup: escapeMarkup,
