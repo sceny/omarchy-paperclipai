@@ -10,7 +10,8 @@ dev/public-text-rules.json:
   unlinked-reference       names another repository's issue without its owner
 
   dev/public-text-check --pr 123 [--repo owner/name]   read the pull request (GITHUB_TOKEN)
-  dev/public-text-check                                inside Actions: the event's pull request
+  dev/public-text-check                                inside Actions: the event's pull request, or on a push
+                                                       the commits it brings and the pull requests it touched
   dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
   dev/public-text-check --standing                     the same rules on the standing texts
 
@@ -276,10 +277,13 @@ def api(path, token):
     return results
 
 
-def read_pull_request(repo, number, token):
+def read_pull_request(repo, number, token, commits=True):
     base = "/repos/%s" % repo
     pr = api("%s/pulls/%d" % (base, number), token)
-    texts = [{"url": pr["html_url"], "body": pr.get("body")}]
+    texts = [{"url": pr["html_url"], "body": pr["title"]}, {"url": pr["html_url"], "body": pr.get("body")}]
+    if commits and pr["state"] == "open":
+        for item in api("%s/pulls/%d/commits?per_page=100" % (base, number), token):
+            texts.append({"url": item["html_url"], "body": item["commit"]["message"]})
     for kind in ("issues/%d/comments", "pulls/%d/reviews", "pulls/%d/comments"):
         for item in api("%s/%s?per_page=100" % (base, kind % number), token):
             texts.append({"url": item["html_url"], "body": item.get("body")})
@@ -287,13 +291,44 @@ def read_pull_request(repo, number, token):
     return {"changed_files": files, "texts": texts}
 
 
-def event_pull_request():
+def read_push(repo, before, after, token):
+    """The commit messages a push brings, the files it changes, and every pull request
+    updated since the commit before it, read as a pull request is read (not its commits:
+    those were read when the pull request was open)."""
+    base = "/repos/%s" % repo
+    since = api("%s/commits/%s" % (base, before), token)["commit"]["committer"]["date"]
+    compare = api("%s/compare/%s...%s" % (base, before, after), token)
+    texts = [{"url": c["html_url"], "body": c["commit"]["message"]} for c in compare["commits"]]
+    files = [f["filename"] for f in compare.get("files", [])]
+    docs = []
+    for pr in api("%s/pulls?state=all&sort=updated&direction=desc&per_page=100" % base, token):
+        if pr["updated_at"] < since:
+            break
+        docs.append(read_pull_request(repo, pr["number"], token, commits=False))
+    return texts, files, docs
+
+
+def check_push(rules, repo, event, token):
+    texts, files, docs = read_push(repo, event["before"], event["after"], token)
+    problems = check_pull_request(rules, {"changed_files": files, "texts": texts})
+    for doc in docs:
+        problems += check_pull_request(rules, doc)
+    return problems
+
+
+def read_event():
     path = os.environ.get("GITHUB_EVENT_PATH")
     if not path:
-        return None
+        return {}
     with open(path) as handle:
-        event = json.load(handle)
-    return (event.get("pull_request") or {}).get("number")
+        return json.load(handle)
+
+
+def pull_request_number(event):
+    if event.get("pull_request"):
+        return event["pull_request"]["number"]
+    issue = event.get("issue") or {}
+    return issue.get("number") if issue.get("pull_request") else None
 
 
 def main(argv=None):
@@ -309,22 +344,27 @@ def main(argv=None):
     if args.standing:
         problems = check_standing(rules)
         what = "standing texts"
-    else:
-        if args.fixture:
-            with open(args.fixture) as handle:
-                doc = json.load(handle)
-        else:
-            number = args.pr or event_pull_request()
-            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-            if not number or not token:
-                print("public-text-check: give --pr (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
-                return 2
-            try:
-                doc = read_pull_request(args.repo, number, token)
-            except (urllib.error.URLError, KeyError, ValueError) as error:
-                print("public-text-check: could not read the pull request: %s" % type(error).__name__, file=sys.stderr)
-                return 2
+    elif args.fixture:
+        with open(args.fixture) as handle:
+            doc = json.load(handle)
         problems = check_pull_request(rules, doc)
+        what = "public text"
+    else:
+        event = read_event()
+        is_push = os.environ.get("GITHUB_EVENT_NAME") == "push" and not args.pr
+        number = args.pr or pull_request_number(event)
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if not token or not (number or is_push):
+            print("public-text-check: give --pr (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
+            return 2
+        try:
+            if is_push:
+                problems = check_push(rules, args.repo, event, token)
+            else:
+                problems = check_pull_request(rules, read_pull_request(args.repo, number, token))
+        except (urllib.error.URLError, KeyError, ValueError) as error:
+            print("public-text-check: could not read the pull request: %s" % type(error).__name__, file=sys.stderr)
+            return 2
         what = "public text"
 
     for where, check, rule_id, matched in problems:
