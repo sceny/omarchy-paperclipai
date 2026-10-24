@@ -15,8 +15,10 @@ dev/public-text-rules.json:
   dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
   dev/public-text-check --standing                     the same rules on the standing texts
 
-A failure names the text's URL, the check and the matched words, never the whole
-text. Exit 0 when nothing fails, 1 when something does, 2 when it cannot read.
+A failure names the text's URL, the check and the rule. The matched words follow
+only outside CI (GITHUB_ACTIONS unset) or with --show-matches: a run log is public,
+and a match is often the private data itself. Exit 0 when nothing fails, 1 when
+something does, 2 when it cannot read.
 """
 
 import argparse
@@ -338,7 +340,9 @@ def main(argv=None):
     parser.add_argument("--fixture")
     parser.add_argument("--standing", action="store_true")
     parser.add_argument("--rules", default=RULES_FILE)
+    parser.add_argument("--show-matches", action="store_true")
     args = parser.parse_args(argv)
+    show_matches = args.show_matches or not os.environ.get("GITHUB_ACTIONS")
     rules = load_rules(args.rules)
 
     if args.standing:
@@ -368,7 +372,8 @@ def main(argv=None):
         what = "public text"
 
     for where, check, rule_id, matched in problems:
-        print("FAIL %s [%s] %s: %s" % (check, rule_id, where, shown(matched)))
+        detail = ": " + shown(matched) if show_matches else ""
+        print("FAIL %s [%s] %s%s" % (check, rule_id, where, detail))
     if problems:
         print("\n%d problem(s) in the %s. Edit the text; the check runs again on the edit." % (len(problems), what))
         return 1

@@ -251,13 +251,27 @@ class WholePullRequest(unittest.TestCase):
     def test_a_clean_pull_request_passes(self):
         self.assertEqual(ptc.check_pull_request(RULES, self.doc("Adds a button for #194.", "Pass. Checked the fold.")), [])
 
-    def run_cli(self, doc):
+    def run_cli(self, doc, ci=False, extra=()):
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+        if ci:
+            env["GITHUB_ACTIONS"] = "true"
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
             json.dump(doc, handle)
         try:
-            return subprocess.run([sys.executable, SCRIPT, "--fixture", handle.name], capture_output=True, text=True)
+            return subprocess.run([sys.executable, SCRIPT, "--fixture", handle.name, *extra],
+                                  capture_output=True, text=True, env=env)
         finally:
             os.unlink(handle.name)
+
+    def test_in_ci_a_failure_names_the_rule_and_not_the_match(self):
+        result = self.run_cli(self.doc("Logs are in /home/someone/logs."), ci=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL public-text-environment [home-path] https://example.test/c/0", result.stdout)
+        self.assertNotIn("someone", result.stdout)
+
+    def test_show_matches_prints_the_match_in_ci(self):
+        result = self.run_cli(self.doc("Logs are in /home/someone/logs."), ci=True, extra=["--show-matches"])
+        self.assertIn("someone", result.stdout)
 
     def test_exit_codes_and_output(self):
         self.assertEqual(self.run_cli(self.doc("Fine.")).returncode, 0)
