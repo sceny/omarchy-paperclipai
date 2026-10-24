@@ -220,8 +220,9 @@ review comment: names the setup (`public-text-environment`: the tools, paths,
 test counts, task numbers); says something is left with no issue reference in
 its bullet or paragraph (`open-item-no-owner`); or names another repository's
 issue without its owner (`unlinked-reference`). The failure names the text's
-URL, the check and the matched words; the author or reviewer edits the text and
-the check runs again on the edit. Every run reads all the pull request's text
+URL, the check and the rule. In CI the run log does not print the matched words,
+since a log is public; `dev/public-text-check --pr N` run locally prints them. The
+author or reviewer edits the text and the check runs again on the edit. Every run reads all the pull request's text
 through the API, so a plain comment is read on the next run of any event.
 
 - Paperclip is this plugin's product: only the words for the tracker that
