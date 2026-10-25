@@ -78,13 +78,15 @@ Item {
   property string servicePending: ""
   property bool stopArmed: false
   readonly property var serviceControl: Model.serviceControl(report, servicePending)
-  // A person stopped it. Auto-start must not undo that for the rest of this
-  // session; the next start of the shell is a new session.
-  property bool _stoppedByUser: false
+  // The bar builds one copy of the plugin per screen, so nothing about "stopped
+  // by the owner" lives here: the service script keeps it in the state directory
+  // for every copy. A shell restart is a new session id, which ends it.
+  readonly property string shellSession: String(Quickshell.instanceId || ("pid" + Quickshell.processId))
+  property bool _wasUp: false
+  property double _lastAutoStartAsk: 0
 
   property var _seenKeys: ({})
   property var _previousReport: null
-  property double _lastStartAttempt: 0
 
   // Writes run one at a time through this queue. Clearing a group of thirteen
   // is thirteen calls, and thirteen agent runs starting at once is not a thing
@@ -159,18 +161,22 @@ Item {
     maybeAutoStart()
   }
 
-  // One attempt per ten minutes: an instance that refuses to start must not
-  // turn into a restart loop nobody asked for.
+  // Every copy asks; bin/omarchy-paperclip-service autostart decides: it honours
+  // the stop marker, takes the start lock and allows one attempt per ten
+  // minutes for the whole shell. Asking is limited to once a minute per copy
+  // only to keep the script from running on every poll.
   function maybeAutoStart() {
-    if (!autoStart || _stoppedByUser || instanceState !== "stopped") return
-    if (servicePending !== "" || serviceProcess.running) return
-    var service = report.service || {}
-    if (!service.installed) return
+    var step = Model.autoStartStep(_wasUp, report, autoStart, servicePending !== "" || serviceProcess.running)
+    _wasUp = step.wasUp
+    if (step.action === "mark-stopped") {
+      Util.execArgv([serviceScript, "mark-stopped", "--session", shellSession])
+      return
+    }
+    if (step.action !== "start") return
     var now = Date.now()
-    if (now - _lastStartAttempt < 600000) return
-    _lastStartAttempt = now
-    actionStatus = "Starting Paperclip…"
-    Util.execArgv([serviceScript, "start", "--quiet"])
+    if (now - _lastAutoStartAsk < 60000) return
+    _lastAutoStartAsk = now
+    Util.execArgv([serviceScript, "autostart", "--quiet", "--session", shellSession])
     settleTimer.restart()
   }
 
@@ -243,7 +249,6 @@ Item {
     var control = serviceControl
     if (control.action !== "start") return refuseService(control)
     if (serviceProcess.running) return "busy"
-    _stoppedByUser = false
     stopArmed = false
     beginService(true)
     return "starting"
@@ -262,7 +267,6 @@ Item {
     }
     stopArmed = false
     stopArmTimer.stop()
-    _stoppedByUser = true
     beginService(false)
     return "stopping"
   }
@@ -284,8 +288,8 @@ Item {
     servicePending = starting ? "start" : "stop"
     pendingTimer.restart()
     say(starting ? "Starting Paperclip…" : "Stopping Paperclip…")
-    serviceProcess.command = starting ? [serviceScript, "start", "--quiet"]
-                                      : [serviceScript, "stop", "--quiet"]
+    serviceProcess.command = starting ? [serviceScript, "start", "--quiet", "--session", shellSession]
+                                      : [serviceScript, "stop", "--quiet", "--session", shellSession]
     serviceProcess.running = true
     settleTimer.restart()
   }

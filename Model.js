@@ -554,6 +554,30 @@ function settlePending(pending, report) {
   return wanted
 }
 
+// What "Keep Paperclip running" does with one new report. `wasUp` is true when
+// the instance answered since the last decision; `busy` is true while the
+// panel's own start or stop is in flight.
+//   "mark-stopped": it answered and its unit is now cleanly inactive, so
+//                   someone stopped it (systemctl, `paperclipai service stop`):
+//                   record that, do not start it.
+//   "start":        ask the service script to start it; the script is the one
+//                   that checks the marker, the lock and the ten-minute rule.
+// A unit that is starting, stopping or running without answering is in
+// transition and gets neither. A failed unit is a crash, not a stop.
+function autoStartStep(wasUp, report, autoStart, busy) {
+  var up = !!report && report.reachable === true
+  var keep = wasUp === true || up
+  if (!report || busy === true || String(report.state) !== "stopped") return { action: "", wasUp: keep }
+  var service = report.service || {}
+  if (service.installed !== true) return { action: "", wasUp: keep }
+  var unit = String(service.activeState || "")
+  if (service.active === true || unit === "activating" || unit === "deactivating") {
+    return { action: "", wasUp: keep }
+  }
+  if (wasUp === true && unit === "inactive") return { action: "mark-stopped", wasUp: false }
+  return { action: autoStart === true ? "start" : "", wasUp: false }
+}
+
 // The words on the Stop button while it waits for the second press.
 function stopConfirmText(working) {
   var n = toCount(working)
@@ -969,6 +993,7 @@ if (typeof module !== "undefined" && module.exports) {
     SERVICE_PENDING_MS: SERVICE_PENDING_MS,
     serviceControl: serviceControl,
     settlePending: settlePending,
+    autoStartStep: autoStartStep,
     stopConfirmText: stopConfirmText,
     diffNotifications: diffNotifications,
     neutralizeOption: neutralizeOption,

@@ -69,6 +69,7 @@ ALLOWED = {
     ("Service.qml", "company"): "a company id, taken from the rows' companyId",
     ("Service.qml", "String(_retryBudget)"): "a count",
     ("Service.qml", "verb"): "a literal chosen two lines above: restore or dismiss",
+    ("Service.qml", "shellSession"): "Quickshell.instanceId: the shell's own random id, not text from the instance; the script keeps only [A-Za-z0-9._-]",
     # The page to open. omarchy-paperclip-open opens it only on the instance's own
     # origin; the value is a path or url the server built (an issue path or a
     # run path), never the title or the reason.
@@ -418,6 +419,7 @@ ASSIGNED = {
     ("Service.qml", "snoozeScript", "pluginDir + \"/bin/omarchy-paperclip-snooze\""): "the plugin's own script, in its folder",
     ("Service.qml", "notifyScript", "pluginDir + \"/bin/omarchy-paperclip-notify\""): "the plugin's own script, in its folder",
     ("Service.qml", "instance", "String(setting(\"instance\", \"\"))"): "the user's own `instance` setting",
+    ("Service.qml", "shellSession", "String(Quickshell.instanceId || (\"pid\" + Quickshell.processId))"): "the shell's own instance id or process id, never text from the instance",
     ("Service.qml", "apiBase", "String(setting(\"apiBase\", \"\"))"): "the user's own `apiBase` setting",
     ("Service.qml", "inboxFilter", "Model.normalizeInboxFilter(setting(\"inboxFilter\", Model.INBOX_NEEDS_ME))"): "a plugin enum (needs-me / all), normalised by Model.normalizeInboxFilter",
     ("Service.qml", "clean", "String(value).replace(/[^A-Za-z0-9._-]/g, \"\")"): "setSetting() strips it to [A-Za-z0-9._-]",
