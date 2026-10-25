@@ -3,6 +3,17 @@
 #
 # Usage:
 #   omarchy-paperclip-service start|stop|restart|install|status [--quiet]
+#   omarchy-paperclip-service autostart|mark-stopped --session ID [--quiet]
+#
+# Every copy of the plugin (the bar builds one per screen) and every stop path
+# share one state in the plugin's state directory:
+#   stopped-by-user     written by `stop` and `mark-stopped`, removed by `start`,
+#                       `restart` and `install`; holds the shell session it
+#                       belongs to, and `autostart` honours it only for that
+#                       session (a shell restart is a new session)
+#   auto-start-attempt  "<session> <epoch>": one automatic start per ten
+#                       minutes for the whole shell
+#   start.lock          flock: one start at a time
 #
 # With the background service installed this is a systemd call. Without it,
 # `start` opens a terminal running `paperclipai run`, because a first run that
@@ -15,10 +26,57 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
 action=${1:-status}
 quiet=false
-for argument in "$@"; do
-  [[ $argument == "--quiet" ]] && quiet=true
+session=${PAPERCLIP_SHELL_SESSION:-}
+shift || true
+while (($# > 0)); do
+  case $1 in
+  --quiet) quiet=true ;;
+  --session)
+    session=${2:-}
+    shift
+    ;;
+  esac
+  shift
 done
+# A session id is a word; anything else is no session.
+[[ $session =~ ^[A-Za-z0-9._-]+$ ]] || session=""
 say() { [[ $quiet == true ]] || pc_say "$@"; }
+
+AUTO_START_GAP=${PAPERCLIP_AUTO_START_GAP:-600}
+state_dir=$(pc_state_dir)
+stop_marker=$state_dir/stopped-by-user
+attempt_file=$state_dir/auto-start-attempt
+lock_file=$state_dir/start.lock
+
+write_stop_marker() {
+  local tmp
+  tmp=$(mktemp "$state_dir/.stopped-by-user.XXXXXX") || return 1
+  printf '%s\n' "$session" >"$tmp" && mv -f "$tmp" "$stop_marker"
+}
+
+clear_stop_marker() { rm -f "$stop_marker"; }
+
+stop_honoured() {
+  # A marker holds for the session that wrote it. An empty session (a stop made
+  # by hand in a terminal) holds until the next start. A marker from another
+  # session is stale and is removed.
+  [[ -e $stop_marker ]] || return 1
+  local owner
+  owner=$(head -n 1 "$stop_marker" 2>/dev/null)
+  if [[ -z $owner || $owner == "$session" ]]; then
+    return 0
+  fi
+  rm -f "$stop_marker"
+  return 1
+}
+
+attempted_recently() {
+  [[ -r $attempt_file ]] || return 1
+  local owner at
+  read -r owner at <"$attempt_file" 2>/dev/null || return 1
+  [[ $owner == "$session" && $at =~ ^[0-9]+$ ]] || return 1
+  (($(date +%s) - at < AUTO_START_GAP))
+}
 
 service_installed() {
   command -v systemctl >/dev/null 2>&1 || return 1
@@ -34,9 +92,9 @@ run_in_terminal() {
     return 1
   }
   if command -v omarchy-launch-terminal >/dev/null 2>&1; then
-    setsid omarchy-launch-terminal -- "${cli[@]}" run >/dev/null 2>&1 &
+    setsid omarchy-launch-terminal -- "${cli[@]}" run >/dev/null 2>&1 {lock_fd}>&- &
   elif command -v xdg-terminal-exec >/dev/null 2>&1; then
-    setsid xdg-terminal-exec -- "${cli[@]}" run >/dev/null 2>&1 &
+    setsid xdg-terminal-exec -- "${cli[@]}" run >/dev/null 2>&1 {lock_fd}>&- &
   else
     pc_fail "No terminal to run 'paperclipai run' in."
     return 1
@@ -44,31 +102,70 @@ run_in_terminal() {
   disown 2>/dev/null || true
 }
 
-case $action in
-start)
+lock_fd=""
+take_lock() {
+  # take_lock <flock options>: one start at a time, across every copy.
+  exec {lock_fd}>"$lock_file" || return 1
+  flock "$@" "$lock_fd"
+}
+
+do_start() {
   if pc_health_ok; then
     say "Paperclip is already running."
-    exit 0
+    return 0
   fi
   if service_installed; then
     say "Starting paperclipai.service…"
-    pc_run_cli service start >/dev/null 2>&1 || systemctl --user start paperclipai.service
+    pc_run_cli service start >/dev/null 2>&1 {lock_fd}>&- || systemctl --user start paperclipai.service
   else
     say "No background service — running Paperclip in a terminal."
-    run_in_terminal || exit 1
+    run_in_terminal || return 1
   fi
   if pc_wait_for_health 60; then
     say "Paperclip is answering on $(pc_api_base)."
-    exit 0
+    return 0
   fi
   pc_fail "Paperclip did not come up."
   pc_notify critical "󰀦" "Paperclip did not start" "Run the doctor to find out why." \
     --exec "$PAPERCLIP_PLUGIN_DIR/bin/omarchy-paperclip-doctor"
-  exit 1
+  return 1
+}
+
+case $action in
+start)
+  clear_stop_marker
+  take_lock -w 90 || {
+    pc_fail "Another start of Paperclip is still running."
+    exit 1
+  }
+  do_start
+  exit $?
+  ;;
+autostart)
+  # The guarded start behind "Keep Paperclip running". Every copy of the plugin
+  # asks; the marker, the lock and the attempt file make it one start.
+  stop_honoured && exit 0
+  service_installed || exit 0
+  take_lock -n || exit 0
+  stop_honoured && exit 0
+  attempted_recently && exit 0
+  pc_health_ok && exit 0
+  printf '%s %s\n' "$session" "$(date +%s)" >"$attempt_file"
+  do_start
+  exit $?
+  ;;
+mark-stopped)
+  write_stop_marker || exit 1
   ;;
 stop)
   if service_installed; then
-    pc_run_cli service stop >/dev/null 2>&1 || systemctl --user stop paperclipai.service
+    # Marked before the stop, so no copy sees a stopped instance without it.
+    write_stop_marker || exit 1
+    if ! { pc_run_cli service stop >/dev/null 2>&1 || systemctl --user stop paperclipai.service; }; then
+      clear_stop_marker
+      pc_fail "Could not stop paperclipai.service."
+      exit 1
+    fi
     say "Stopped paperclipai.service."
   else
     pc_warn "No background service installed; stop the terminal running 'paperclipai run'."
@@ -76,6 +173,7 @@ stop)
   fi
   ;;
 restart)
+  clear_stop_marker
   if service_installed; then
     say "Restarting paperclipai.service…"
     pc_run_cli service restart >/dev/null 2>&1 || systemctl --user restart paperclipai.service
@@ -90,6 +188,7 @@ restart)
   fi
   ;;
 install)
+  clear_stop_marker
   pc_run_cli service install || {
     pc_fail "Could not install the background service."
     exit 1

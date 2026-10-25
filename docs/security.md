@@ -56,6 +56,7 @@ All of it under the state directory, all of it yours alone (0700 / 0600):
 | Snooze and focus state | `snooze.json` | until the snooze ends or you change it |
 | Doctor and agent sessions: bundle, `prompt.txt`, `AGENTS.md`, repair logs | `doctor-<time>/`, `session-<time>/` | 7 days, then removed |
 | Token (yours) | `token` | until you remove it |
+| Whether you stopped Paperclip, the last automatic start, the start lock (a session id and a time, no inbox text) | `stopped-by-user`, `auto-start-attempt`, `start.lock` | until you press Start or the shell restarts; the lock is empty |
 
 The plugin keeps no copy of the inbox. It asks the instance each time.
 

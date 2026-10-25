@@ -678,4 +678,42 @@ group("the footer offers the service key only when it does something", () => {
   assert.equal(Model.primaryAction(down, "").id, "start")
 })
 
+// "Keep Paperclip running": a stop seen from outside the panel is not undone.
+group("auto-start step", () => {
+  const down = (unit, extra) => Object.assign({ state: "stopped", reachable: false,
+    service: { installed: true, active: false, activeState: unit } }, extra)
+  const up = { state: "idle", reachable: true, service: { installed: true, active: true, activeState: "active" } }
+
+  // Down at the first look: start it.
+  assert.deepEqual(Model.autoStartStep(false, down("inactive"), true, false), { action: "start", wasUp: false })
+  // Answering, then cleanly inactive (systemctl stop, paperclipai service stop): record it, do not start.
+  assert.deepEqual(Model.autoStartStep(true, down("inactive"), true, false), { action: "mark-stopped", wasUp: false })
+  // Recorded even with the setting Off: turning it On later must not undo the stop.
+  assert.equal(Model.autoStartStep(true, down("inactive"), false, false).action, "mark-stopped")
+  // A crash is not a stop.
+  assert.equal(Model.autoStartStep(true, down("failed"), true, false).action, "start")
+  // The setting Off starts nothing.
+  assert.equal(Model.autoStartStep(false, down("inactive"), false, false).action, "")
+  // Answering: remember it, do nothing.
+  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "", wasUp: true })
+  // In transition the unit gets neither, and the memory of "was up" survives to the next look.
+  for (const unit of ["deactivating", "activating"]) {
+    assert.deepEqual(Model.autoStartStep(true, down(unit), true, false), { action: "", wasUp: true }, unit)
+  }
+  // The unit is up and not answering yet: starting, not stopped.
+  const starting = down("active", { service: { installed: true, active: true, activeState: "active" } })
+  assert.deepEqual(Model.autoStartStep(true, starting, true, false), { action: "", wasUp: true })
+  // The sequence of a terminal stop: up, deactivating, inactive.
+  let step = Model.autoStartStep(false, up, true, false)
+  step = Model.autoStartStep(step.wasUp, down("deactivating"), true, false)
+  step = Model.autoStartStep(step.wasUp, down("inactive"), true, false)
+  assert.equal(step.action, "mark-stopped")
+  // The panel's own start or stop in flight: nothing, and nothing forgotten.
+  assert.deepEqual(Model.autoStartStep(true, down("inactive"), true, true), { action: "", wasUp: true })
+  // No background service, or no report: nothing to start.
+  assert.equal(Model.autoStartStep(false, down("", { service: { installed: false } }), true, false).action, "")
+  assert.equal(Model.autoStartStep(false, null, true, false).action, "")
+  assert.equal(Model.autoStartStep(false, { state: "needs-you", reachable: true }, true, false).action, "")
+})
+
 console.log("all groups passed")

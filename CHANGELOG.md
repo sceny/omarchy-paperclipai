@@ -14,6 +14,8 @@ GitHub release with these notes.
   whether the instance is running, starting, stopping or stopped, with one
   button (key `v`) for Start or Stop. Stopping an instance with agents at work
   asks once. A change made outside the panel shows in the row within a poll.
+  *Keep Paperclip running* respects a stop on every screen and from a terminal,
+  and starts Paperclip once for the whole shell, not once per screen.
 - **Clicking an inbox row opens that item**: a row opens its page in the
   browser. Only the board itself raises the Paperclip web app window, because a
   raised window takes no address from outside and the click showed nothing.

@@ -110,8 +110,25 @@ outside the panel (`systemctl --user`, a terminal) shows within a poll.
 - **Stop asks once when agents are at work.** The first press names how many
   and turns the button into *press again*; the second, within six seconds,
   stops it. An idle instance stops at the first press.
-- **A stop from the panel stays stopped until the shell restarts.** *Keep
-  Paperclip running* (`autoStart`) does not start it again meanwhile.
+- **A stop stays stopped until Start or a shell restart.** *Keep Paperclip
+  running* (`autoStart`) does not start it again meanwhile, on every screen:
+  the bar builds one copy of the plugin per screen, and all copies share one
+  marker, `stopped-by-user` in `$XDG_STATE_HOME/omarchy/paperclipai`.
+  `omarchy-paperclip-service stop` writes it; `start`, `restart` and `install`
+  remove it. It belongs to the shell session that wrote it, so a restart of
+  the shell ends it.
+- **A stop from a terminal counts too.** `systemctl --user stop paperclipai`
+  and `paperclipai service stop` are recognised when the plugin sees the
+  instance answering and then the unit cleanly inactive; it writes the same
+  marker. A unit that is *failed* is a crash, and `autoStart` starts it. The
+  plugin cannot see a stop made while the shell was not running, or a stop
+  between two polls of an instance it never saw answering: turn *Keep
+  Paperclip running* Off to keep it stopped in those cases.
+- **Only one start runs at a time.** `autoStart` goes through
+  `omarchy-paperclip-service autostart`, which takes a lock in the state
+  directory and allows one attempt per ten minutes for the whole shell, not per
+  screen. A Start from the panel waits for a start in progress, then finds
+  Paperclip answering.
 - A refusal (no background service installed, the script failed) is the
   script's own sentence in the panel's subtitle.
 - From a script: `omarchy-shell paperclip serviceState`, `startService`,
