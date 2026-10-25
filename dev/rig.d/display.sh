@@ -461,17 +461,12 @@ $(tail -n 8 "$log" 2>/dev/null)"
     grim_err=$(timeout --kill-after=2 6 grim -t ppm /dev/null 2>&1 >/dev/null) || grim_status=$?
     ms=$(((${EPOCHREALTIME/./} - t0) / 1000))
     rig_step "measure: grim exit $grim_status after ${ms} ms"
+    rig_wake_parent_stop
+    # A lost start never produces a frame, even after 20 s, so it is not waited for.
     if ((grim_status != 0)); then
-      local late_status=0
-      t0=${EPOCHREALTIME/./}
-      timeout --kill-after=2 20 grim -t ppm /dev/null >/dev/null 2>&1 || late_status=$?
-      ms=$(((${EPOCHREALTIME/./} - t0) / 1000))
-      rig_step "measure: a later grim, waker still running: exit $late_status after ${ms} ms"
-      rig_wake_parent_stop
       RIG_LOST_REASON="grim exit $grim_status: $(printf '%s' "$grim_err" | head -c 120 | tr '\n' ' ')"
       return 75
     fi
-    rig_wake_parent_stop
   fi
   rig_check_config_errors
   rig_ok "compositor up ($RIG_VIEW; pid $RIG_HYPR_PID, display $RIG_NESTED_DISPLAY)"
