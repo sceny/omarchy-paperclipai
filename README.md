@@ -406,3 +406,5 @@ It proves install, enable, disable, remove, script behaviour and that the shell
 loads the plugin. How the panel looks and behaves is Panel QA's call: bring the
 rig up with `dev/sandbox dev up`, take screenshots with `dev/sandbox dev shot`,
 and read them with `dev/sandbox dev pull`. The owner looks at those, never at a live rig.
+
+Made by [Sceny](https://sceny.github.io/?from=paperclip): AI that makes you more able. Also from Sceny: [Learning Sceny](https://sceny.github.io/?from=paperclip#beta), a study app whose memory links fade as you learn.
