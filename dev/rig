@@ -114,6 +114,12 @@ rig_up_cleanup_on_failure() {
   local keep="$RIG_TMP_ROOT/last-failed-up"
   rm -rf "$keep"
   rig_teardown "$keep"
+  # `ci` has an evidence directory the caller takes away; the fixed one above
+  # is gone with a container that is deleted afterwards.
+  if [[ -n ${RIG_CI_EVIDENCE:-} && -d $keep ]]; then
+    mkdir -p "$RIG_CI_EVIDENCE/up-failed"
+    cp -r "$keep/." "$RIG_CI_EVIDENCE/up-failed/" 2>/dev/null || true
+  fi
 }
 
 rig_on_signal() {
@@ -421,6 +427,7 @@ cmd_ci() {
   [[ -n ${RIG_OWNER_PID:-} ]] || RIG_OWNER_PID=$$
   [[ " ${up_args[*]} " == *" --ttl "* ]] || up_args+=(--ttl "$RIG_CI_TTL")
 
+  RIG_CI_EVIDENCE=$out
   cmd_up "${up_args[@]}" || return 1
   local status=0
   # A subshell: rig_die exits, and an exit here would skip the teardown.
