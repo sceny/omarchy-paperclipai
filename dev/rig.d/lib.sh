@@ -505,6 +505,14 @@ rig_wait_gone() {
   return 1
 }
 
+rig_teardown_note() {
+  # A line in evidence/instance-timing.log for a stop the teardown sends, the
+  # same lines rig_pc_stop writes. Only the verbs that load paperclip.sh have
+  # rig_pc_timing; the others have no instance to explain.
+  declare -F rig_pc_timing >/dev/null || return 0
+  rig_pc_timing "$@" 2>/dev/null || true
+}
+
 rig_teardown() {
   # Order matters: the instance first (it owns a database that wants a clean
   # stop), then the display (shell, compositor, headless parent), then
@@ -529,9 +537,15 @@ rig_teardown() {
 
   if [[ -n ${RIG_INSTANCE_PID:-} ]]; then
     rig_step "stopping the throwaway Paperclip instance (pid $RIG_INSTANCE_PID)"
+    RIG_PC_T0=$SECONDS
+    rig_teardown_note "stop: TERM to the instance (pid $RIG_INSTANCE_PID), sent by the rig's teardown"
     rig_kill_tree "$RIG_INSTANCE_PID" TERM
-    rig_wait_gone "$RIG_INSTANCE_PID" 25 || rig_kill_tree "$RIG_INSTANCE_PID" KILL
+    rig_wait_gone "$RIG_INSTANCE_PID" 25 || {
+      rig_teardown_note "stop: the instance ignored TERM for 25 s, KILL"
+      rig_kill_tree "$RIG_INSTANCE_PID" KILL
+    }
     rig_wait_gone "$RIG_INSTANCE_PID" 10 || rig_warn "instance pid $RIG_INSTANCE_PID will not die"
+    rig_teardown_note "stop: the instance is gone"
   fi
 
   # Embedded Postgres is started by the instance but survives it often enough
@@ -541,8 +555,13 @@ rig_teardown() {
     local pg
     for pg in $(pgrep -f -- "-D $RIG_PAPERCLIP_DATA" 2>/dev/null); do
       rig_step "stopping leftover embedded Postgres (pid $pg)"
+      rig_teardown_note "stop: TERM to postgres (pid $pg), sent by the rig's teardown"
       kill -TERM "$pg" 2>/dev/null || true
-      rig_wait_gone "$pg" 15 || kill -KILL "$pg" 2>/dev/null || true
+      rig_wait_gone "$pg" 15 || {
+        rig_teardown_note "stop: postgres (pid $pg) ignored TERM for 15 s, KILL"
+        kill -KILL "$pg" 2>/dev/null || true
+      }
+      rig_teardown_note "stop: postgres (pid $pg) is gone"
     done
   fi
 

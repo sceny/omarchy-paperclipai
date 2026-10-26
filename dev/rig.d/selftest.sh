@@ -133,6 +133,21 @@ FAKE
   chmod +x "$1"
 }
 st_evidence_has() { grep -q -- "$2" "$(<"$1/last-session")/evidence/$3"; }
+st_teardown_with_instance() {
+  # st_teardown_with_instance <scratch> — a rig whose state names a running
+  # instance, torn down with evidence kept in <scratch>/kept.
+  local scratch=$1 id
+  id=$(st_fake_rig none 600)
+  (
+    RIG_SELECT=$id
+    rig_select || exit 1
+    sleep 600 >/dev/null 2>&1 &
+    rig_state_set instance_pid "$!"
+    RIG_INSTANCE_PID=$!
+    rig_teardown "$scratch/kept" >/dev/null 2>&1
+  )
+}
+st_kept_has() { grep -q -- "$2" "$1/kept/instance-timing.log"; }
 st_instance_cases() {
   local scratch=$1
   st_fake_instance "$scratch/silent" silent
@@ -154,6 +169,11 @@ st_instance_cases() {
   st_check "a late instance starts" st_instance_start "$scratch" 30 "$scratch/late"
   st_check "its first health answer is in the timing file" st_evidence_has "$scratch" 'first health answer' instance-timing.log
   st_check "no failure evidence for it" st_expr '[[ ! -e $(<"$scratch/last-session")/evidence/instance-start-failed ]]'
+
+  rig_say "A teardown says which stop it sent"
+  st_check "a teardown with an instance runs" st_teardown_with_instance "$scratch"
+  st_check "the timing file says the teardown sent TERM to the instance" st_kept_has "$scratch" "TERM to the instance (pid .*), sent by the rig's teardown"
+  st_check "the timing file says the instance is gone" st_kept_has "$scratch" 'stop: the instance is gone'
 }
 
 cmd_selftest() {
