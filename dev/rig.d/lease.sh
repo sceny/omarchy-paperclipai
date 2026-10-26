@@ -266,7 +266,7 @@ rig_lock() {
 rig_unlock() {
   [[ -n ${RIG_LOCK_FD:-} ]] || return 0
   flock -u "$RIG_LOCK_FD" 2>/dev/null || true
-  exec {RIG_LOCK_FD}>&- 2>/dev/null || true
+  exec {RIG_LOCK_FD}>&-
   rm -f "$RIG_LOCK_FILE"
   RIG_LOCK_FD=""
 }

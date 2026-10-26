@@ -65,6 +65,34 @@ st_some_of() { [[ -n $(rig_tagged_pids "$1") ]]; }
 st_gone() { [[ ! -e $RIG_TMP_ROOT/$1 && ! -e $RIG_RUNTIME_ROOT/opr.${1##*.} ]]; }
 st_listed() { cmd_ps | grep -q "$1"; }
 st_lease() { [[ $(rig_lease_state "$RIG_TMP_ROOT/$1") == "$2" ]]; }
+st_nested_teardown() {
+  # st_nested_teardown <rig id> — a teardown started while this process holds the lock returns at once.
+  (
+    RIG_SELECT=$1
+    rig_select && rig_lock 5 || exit 1
+    local t=$SECONDS
+    rig_teardown >/dev/null 2>&1 && exit 1
+    ((SECONDS - t < 5))
+  )
+}
+st_unlock_keeps_stderr() {
+  # The unlock must leave the shell's stderr as it was: teardown reports there.
+  local out
+  out=$( (RIG_LOCK_FILE=$RIG_TMP_ROOT/unlock-probe.lock; rig_lock 5 && rig_unlock; echo kept >&2) 2>&1 )
+  [[ $out == *kept* ]]
+}
+st_state_busy() {
+  # A state file another process holds is given up on, not waited for forever.
+  (
+    RIG_SELECT=$1
+    rig_select || exit 1
+    exec 8>"$RIG_SESSION/.state.lock"
+    flock -x 8
+    local t=$SECONDS
+    rig_state_set probe busy >/dev/null 2>&1 && exit 1
+    ((SECONDS - t < 40))
+  )
+}
 
 cmd_selftest() {
   local scratch
@@ -135,6 +163,18 @@ cmd_selftest() {
   st_check "verify-clean fails while it exists" st_expr '! cmd_verify_clean'
   st_check "reap ends it" \
     st_expr 'cmd_reap >/dev/null 2>&1; [[ -z $(rig_tagged_pids leaked.20000101-000000.abcdef) ]]'
+
+  rig_say "Teardown never waits on itself"
+  e=$(st_fake_rig none 600)
+  st_check "a teardown inside a running teardown returns at once" st_nested_teardown "$e"
+  st_check "an unlock leaves the shell's stderr alone" st_unlock_keeps_stderr
+  st_check "a state file held by another process is given up on" st_state_busy "$e"
+  (
+    RIG_SELECT=$e
+    rig_select && rig_teardown >/dev/null 2>&1
+  )
+  st_check "rig E is gone after teardown" st_gone "$e"
+  st_check "rig E's processes are gone" st_none_of "$e"
 
   rig_say "Down of a live rig leaves nothing"
   (

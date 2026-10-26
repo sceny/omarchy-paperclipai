@@ -116,6 +116,13 @@ rig_up_cleanup_on_failure() {
   rig_teardown "$keep"
 }
 
+rig_on_signal() {
+  # A signal during a teardown waits for it: a nested teardown would wait on the lock this process holds.
+  [[ -z ${RIG_LOCK_FD:-} ]] || return 0
+  rig_teardown
+  exit 130
+}
+
 cmd_up() {
   local view=hidden ttl=${RIG_TTL:-$RIG_DEFAULT_TTL}
   while (($#)); do
@@ -165,7 +172,7 @@ cmd_up() {
   rig_say "Bringing up the rig for $RIG_PLUGIN_ID ($RIG_VIEW)"
   rig_create_sandbox
   trap rig_up_cleanup_on_failure EXIT
-  trap 'rig_teardown; exit 130' INT TERM
+  trap rig_on_signal INT TERM
 
   rig_state_set plugin_id "$RIG_PLUGIN_ID"
   rig_state_set view "$RIG_VIEW"
