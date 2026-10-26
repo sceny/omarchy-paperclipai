@@ -214,6 +214,12 @@ dev/rig selftest               # test the lease, keeper, ps and reap; needs no c
 
 `ci` writes its evidence (one log per check, plus `nested-shell.png`) to
 `.rig-evidence/` and exits non-zero if any check or the teardown proof fails.
+Every start of the throwaway instance adds its times to `instance-timing.log`
+there (start sent, Postgres accepting connections, first health answer, and
+the stops). A start with no health answer within `RIG_PC_HEALTH_SECS` (180) or
+an instance that exits adds `instance-start-failed/`: the instance and Postgres
+log, the machine's load and pressure, and the busiest processes. A failed `up`
+under `ci` keeps all of it in `up-failed/`.
 
 For a busy panel by hand, run `up`, then `install` (`up` does not put the plugin
 on the bar), then `seed`, then the screenshot or the panel check. `check`
@@ -248,7 +254,7 @@ parent on its first frame (the parent drops it, or it never draws). The rig
 wakes the parent with a virtual key press (`wtype`, on the rig's private socket
 only), checks that a frame can be captured, and starts the compositor again if
 not, up to 20 times, so `up` can take a few extra seconds. A failed `up` keeps
-its logs in `$RIG_TMP_ROOT/last-failed-up`.
+its logs in `$RIG_TMP_ROOT/last-failed-up` (under `ci`, also in `up-failed/` of its evidence).
 
 
 ### Owner, lease and no zombies

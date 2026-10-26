@@ -92,6 +92,54 @@ rig_pc_healthy() {
     jq -e '.status == "ok"' >/dev/null 2>&1
 }
 
+# How long a start may take to answer health. A test shortens it; the rig does not.
+RIG_PC_HEALTH_SECS=${RIG_PC_HEALTH_SECS:-180}
+
+rig_pc_timing() {
+  # One line in evidence/instance-timing.log: when, how far into this start,
+  # and how loaded the machine was. A start that fails is read from these.
+  local load=?
+  read -r load _ </proc/loadavg 2>/dev/null || true
+  mkdir -p "$RIG_EVIDENCE"
+  printf '%s +%3ss load1=%s %s\n' "$(date -u +%H:%M:%S)" \
+    "$((SECONDS - ${RIG_PC_T0:-$SECONDS}))" "$load" "$*" >>"$RIG_EVIDENCE/instance-timing.log"
+}
+
+rig_pc_postgres_listening() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$RIG_PG_PORT") 2>/dev/null
+}
+
+rig_pc_health_evidence() {
+  # rig_pc_health_evidence <why>: what a failed start leaves for the next
+  # reader, in the evidence directory (kept by teardown, returned by
+  # `dev/sandbox run`). Bounded: the logs' last megabyte, one process listing.
+  local dest="$RIG_EVIDENCE/instance-start-failed" dir f
+  dir=$(rig_pc_instance_dir)
+  mkdir -p "$dest"
+  rig_pc_timing "failed: $1"
+  tail -c 1048576 "$RIG_LOGS/instance.log" >"$dest/instance.log" 2>/dev/null || true
+  while IFS= read -r f; do
+    mkdir -p "$dest/$(dirname "${f#"$dir"/}")"
+    tail -c 1048576 "$f" >"$dest/${f#"$dir"/}" 2>/dev/null || true
+  done < <(find "$dir/logs" "$dir/db" -maxdepth 3 -type f \
+    \( -name '*.log' -o -name '*.log.*' -o -name postmaster.pid -o -name postmaster.opts \) 2>/dev/null)
+  {
+    printf 'health answer now: %s\n' "$(curl -sS --max-time 4 -o /dev/null -w '%{http_code}' "$(rig_pc_api_base)/api/health" 2>&1)"
+    printf 'postgres port %s accepting: %s\n' "$RIG_PG_PORT" "$(rig_pc_postgres_listening && echo yes || echo no)"
+    printf '\n-- loadavg\n'
+    cat /proc/loadavg 2>/dev/null
+    for f in cpu memory io; do
+      printf '\n-- pressure %s\n' "$f"
+      cat "/proc/pressure/$f" 2>/dev/null
+    done
+    printf '\n-- cgroup memory.events, memory.current, memory.max\n'
+    cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max 2>/dev/null
+    printf '\n-- processes by cpu\n'
+    ps -eo pid,ppid,stat,etimes,pcpu,pmem,args --sort=-pcpu 2>/dev/null | cut -c1-200 | head -40
+  } >"$dest/machine.txt" 2>&1
+  rig_warn "no health answer: timing in $RIG_EVIDENCE/instance-timing.log, logs in $dest"
+}
+
 rig_pc_start() {
   rig_pc_healthy && {
     rig_ok "throwaway instance already answering on $(rig_pc_api_base)"
@@ -103,6 +151,7 @@ rig_pc_start() {
   log="$RIG_LOGS/instance.log"
 
   rig_step "starting the throwaway instance ($cli run)"
+  RIG_PC_T0=$SECONDS
   # PORT is belt to the config's braces: if anything ever regenerates the
   # config, the listen port still cannot fall back to the owner's 3100.
   # nohup rather than setsid: nohup execs, so $! is the instance itself and
@@ -112,22 +161,30 @@ rig_pc_start() {
     "$cli" run -d "$RIG_PAPERCLIP_DATA" -i "$RIG_INSTANCE_ID" >>"$log" 2>&1) &
   RIG_INSTANCE_PID=$!
   rig_state_set instance_pid "$RIG_INSTANCE_PID"
+  rig_pc_timing "start sent (pid $RIG_INSTANCE_PID)"
 
-  local deadline=$((SECONDS + 180))
+  local deadline=$((SECONDS + RIG_PC_HEALTH_SECS)) pg_seen=0
   while ((SECONDS < deadline)); do
     kill -0 "$RIG_INSTANCE_PID" 2>/dev/null || {
       rig_fail "the throwaway instance exited; last lines of $log:"
       tail -20 "$log" >&2
+      rig_pc_health_evidence "the instance exited"
       rig_die "instance did not start"
     }
+    if ((!pg_seen)) && rig_pc_postgres_listening; then
+      pg_seen=1
+      rig_pc_timing "postgres accepting connections"
+    fi
     rig_pc_healthy && {
+      rig_pc_timing "first health answer"
       rig_ok "throwaway instance answering on $(rig_pc_api_base) (pid $RIG_INSTANCE_PID)"
       return 0
     }
     sleep 3
   done
-  rig_fail "no health after 180s; last lines of $log:"
+  rig_fail "no health after ${RIG_PC_HEALTH_SECS}s; last lines of $log:"
   tail -20 "$log" >&2
+  rig_pc_health_evidence "no health after ${RIG_PC_HEALTH_SECS}s"
   rig_die "instance never became healthy"
 }
 
@@ -136,14 +193,25 @@ rig_pc_stop() {
   # the data directory intact and restartable.
   [[ -n ${RIG_INSTANCE_PID:-} ]] || return 0
   rig_step "stopping the throwaway instance (pid $RIG_INSTANCE_PID)"
+  RIG_PC_T0=$SECONDS
+  rig_pc_timing "stop: TERM to the instance (pid $RIG_INSTANCE_PID)"
   rig_kill_tree "$RIG_INSTANCE_PID" TERM
-  rig_wait_gone "$RIG_INSTANCE_PID" 30 || rig_kill_tree "$RIG_INSTANCE_PID" KILL
+  rig_wait_gone "$RIG_INSTANCE_PID" 30 || {
+    rig_pc_timing "stop: the instance ignored TERM for 30 s, KILL"
+    rig_kill_tree "$RIG_INSTANCE_PID" KILL
+  }
   rig_wait_gone "$RIG_INSTANCE_PID" 10 || true
+  rig_pc_timing "stop: the instance is gone"
 
   local pg
   for pg in $(pgrep -f -- "-D $RIG_PAPERCLIP_DATA" 2>/dev/null); do
+    rig_pc_timing "stop: TERM to postgres (pid $pg), sent by the rig's own stop"
     kill -TERM "$pg" 2>/dev/null || true
-    rig_wait_gone "$pg" 15 || kill -KILL "$pg" 2>/dev/null || true
+    rig_wait_gone "$pg" 15 || {
+      rig_pc_timing "stop: postgres (pid $pg) ignored TERM for 15 s, KILL"
+      kill -KILL "$pg" 2>/dev/null || true
+    }
+    rig_pc_timing "stop: postgres (pid $pg) is gone"
   done
 
   local deadline=$((SECONDS + 20))

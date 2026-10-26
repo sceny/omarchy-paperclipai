@@ -94,6 +94,68 @@ st_state_busy() {
   )
 }
 
+st_instance_start() {
+  # st_instance_start <scratch> <health secs> <fake instance script> — the real
+  # rig_pc_start against a stand-in instance, in a session of its own. Prints
+  # the session dir; the exit status is rig_pc_start's.
+  local scratch=$1 secs=$2 fake=$3 port
+  port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  (
+    rig_define_paths "$scratch/session.$RANDOM"
+    mkdir -p "$RIG_LOGS" "$RIG_EVIDENCE" "$(rig_pc_instance_dir)/logs"
+    printf '%s\n' "$RIG_SESSION" >"$scratch/last-session"
+    RIG_HTTP_PORT=$port RIG_PG_PORT=1 RIG_INSTANCE_ID=rig
+    RIG_PAPERCLIP_CLI=$fake RIG_PC_HEALTH_SECS=$secs
+    rig_pc_start >/dev/null 2>&1
+  )
+}
+st_fake_instance() {
+  # st_fake_instance <path> <behaviour> — a script that stands in for `paperclipai run`.
+  cat >"$1" <<FAKE
+#!/bin/bash
+echo "fake instance: $2"
+case "$2" in
+silent) exec sleep 30 ;;
+exits) exit 3 ;;
+late) exec timeout 40 python3 - <<'PY'
+import http.server, os, time
+time.sleep(4)
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+PY
+;;
+esac
+FAKE
+  chmod +x "$1"
+}
+st_evidence_has() { grep -q -- "$2" "$(<"$1/last-session")/evidence/$3"; }
+st_instance_cases() {
+  local scratch=$1
+  st_fake_instance "$scratch/silent" silent
+  st_fake_instance "$scratch/exits" exits
+  st_fake_instance "$scratch/late" late
+
+  rig_say "An instance that never answers health leaves its evidence"
+  st_check "a silent instance fails the start" st_expr '! st_instance_start "$scratch" 4 "$scratch/silent"'
+  st_check "the timing file says when the start was sent" st_evidence_has "$scratch" 'start sent' instance-timing.log
+  st_check "the timing file says why it failed" st_evidence_has "$scratch" 'failed: no health after 4s' instance-timing.log
+  st_check "the instance log is kept" st_evidence_has "$scratch" 'fake instance: silent' instance-start-failed/instance.log
+  st_check "the machine's load and pressure are kept" st_evidence_has "$scratch" 'loadavg' instance-start-failed/machine.txt
+
+  rig_say "An instance that exits is told apart from one that is slow"
+  st_check "an exiting instance fails the start" st_expr '! st_instance_start "$scratch" 20 "$scratch/exits"'
+  st_check "the timing file says it exited" st_evidence_has "$scratch" 'failed: the instance exited' instance-timing.log
+
+  rig_say "A slow start that ends healthy is timed, not failed"
+  st_check "a late instance starts" st_instance_start "$scratch" 30 "$scratch/late"
+  st_check "its first health answer is in the timing file" st_evidence_has "$scratch" 'first health answer' instance-timing.log
+  st_check "no failure evidence for it" st_expr '[[ ! -e $(<"$scratch/last-session")/evidence/instance-start-failed ]]'
+}
+
 cmd_selftest() {
   local scratch
   scratch=$(mktemp -d "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-selftest.XXXXXX")
@@ -184,6 +246,8 @@ cmd_selftest() {
   st_check "rig B is gone after teardown" st_gone "$b"
   st_check "rig B's processes are gone" st_none_of "$b"
   st_check "verify-clean passes with no rigs" cmd_verify_clean
+
+  st_instance_cases "$scratch"
 
   # The stand-in owners and anything else this test started.
   kill "$owner_a" "$owner_b" 2>/dev/null || true
