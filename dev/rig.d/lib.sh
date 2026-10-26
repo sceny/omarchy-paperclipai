@@ -436,7 +436,7 @@ rig_state_set() {
   # started it both write here.
   local key=$1 value=$2 tmp
   (
-    flock 9
+    flock -w 30 9 || { rig_warn "the state file is locked by another process; $key was not written"; exit 1; }
     tmp=$(mktemp "$RIG_SESSION/.state.XXXXXX")
     if [[ -f $RIG_STATE_FILE ]]; then
       grep -v "^$key=" "$RIG_STATE_FILE" >"$tmp" || true
@@ -512,6 +512,10 @@ rig_teardown() {
   # rig at a time: the keeper, `down` and `reap` can all arrive together.
   local keep_evidence=${1:-}
 
+  if [[ -n ${RIG_LOCK_FD:-} ]]; then
+    rig_warn "a teardown of $RIG_ID is already running in this process"
+    return 1
+  fi
   rig_say "Tearing down"
   if ! rig_lock 120; then
     rig_warn "another teardown of $RIG_ID holds the lock and did not finish"
