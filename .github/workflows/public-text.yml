@@ -4,8 +4,8 @@ name: public-text
 # a pull request's title, body, commit messages, comments, reviews and review
 # comments name no setup of ours, leave nothing open without an issue and name no
 # other repository's issue without its owner. A push to develop reads the commit
-# messages it brings and every pull request it touched, so a comment after the
-# merge and a squash message that lands are checked too. The pull request events
+# messages it brings and the pull requests it merged, so a squash message that lands
+# is checked too; an open pull request is not the push's to fail. The pull request events
 # run from the merge ref, so this file works before a release reaches main; an
 # issue_comment run and a schedule take effect only from the default branch.
 

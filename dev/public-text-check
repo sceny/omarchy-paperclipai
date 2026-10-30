@@ -294,19 +294,22 @@ def read_pull_request(repo, number, token, commits=True):
 
 
 def read_push(repo, before, after, token):
-    """The commit messages a push brings, the files it changes, and every pull request
-    updated since the commit before it, read as a pull request is read (not its commits:
-    those were read when the pull request was open)."""
+    """The commit messages a push brings, the files it changes, and each pull request
+    the push merged, read as a pull request is read (not its commits: those were read
+    when the pull request was open). A pull request the push merged is one whose merge
+    commit the push brings; an open pull request, or one merged by another push, is
+    not this push's to fail."""
     base = "/repos/%s" % repo
-    since = api("%s/commits/%s" % (base, before), token)["commit"]["committer"]["date"]
     compare = api("%s/compare/%s...%s" % (base, before, after), token)
     texts = [{"url": c["html_url"], "body": c["commit"]["message"]} for c in compare["commits"]]
     files = [f["filename"] for f in compare.get("files", [])]
-    docs = []
-    for pr in api("%s/pulls?state=all&sort=updated&direction=desc&per_page=100" % base, token):
-        if pr["updated_at"] < since:
-            break
-        docs.append(read_pull_request(repo, pr["number"], token, commits=False))
+    shas = {c["sha"] for c in compare["commits"]}
+    numbers = []
+    for sha in sorted(shas):
+        for pr in api("%s/commits/%s/pulls?per_page=100" % (base, sha), token):
+            if pr.get("merged_at") and pr.get("merge_commit_sha") in shas and pr["number"] not in numbers:
+                numbers.append(pr["number"])
+    docs = [read_pull_request(repo, number, token, commits=False) for number in numbers]
     return texts, files, docs
 
 
