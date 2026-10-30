@@ -95,8 +95,20 @@ reads a pull request's text against the rules.
 
 A review is posted with `gh pr review <n> --comment --body …`, never `gh pr
 comment`. Until `main` carries `public-text.yml`, only a review starts
-`public-text` on the pull request's head before the merge; a plain comment is
-first read after it.
+`public-text` on the pull request's head; a plain comment does not.
+
+`develop` merges through a merge queue, so `gh pr merge` is refused. Merge by
+adding the pull request to the queue:
+
+```sh
+gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{state}}}' \
+  -f id="$(gh pr view <n> --json id --jq .id)"
+```
+
+The queue runs `public-text` again when the merge is asked for, and that run
+reads every comment and review posted until then. A pull request whose text
+fails leaves the queue unmerged. There is no need to wait for the run a review
+started before you add the pull request to the queue.
 
 ## Releasing
 
