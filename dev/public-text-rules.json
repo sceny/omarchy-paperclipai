@@ -121,7 +121,7 @@
       {
         "id": "not-checked",
         "regex": "\\bnot\\s+(?:yet\\s+|been\\s+)?(?:checked|tested|covered|verified|driven)\\b",
-        "unless_line": "not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
+        "unless_line": "^\\s*(?:[-*+]\\s+)?Not\\s+verified:|not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
       },
       {
         "id": "unchecked",
