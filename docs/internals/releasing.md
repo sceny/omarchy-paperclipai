@@ -233,10 +233,12 @@ through the API, so a plain comment is read on the next run of any event.
 - The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
   task numbers, dates and the owner's words as history, in the unit tests
   (`dev/public-text-check --standing`).
-- `public-text` is a required status check on `develop` (branch protection,
-  admins included). A direct push to `develop` is refused, so the `release` workflow
-  posts a `public-text` success status on the `main` commit it brings
-  `develop` level with (a push to `main` has no pull request text).
+- `public-text` is a required status check on `develop`, behind two gates that
+  both hold admins too: branch protection (`enforce_admins` on) and the
+  repository ruleset `develop requires public-text` (no bypass actor). A direct
+  push to `develop` is refused, so the `release` workflow posts a `public-text`
+  success status on the `main` commit it brings `develop` level with (a push to
+  `main` has no pull request text).
 - The checker and its rules are the same files as in `sceny/omarchy-devices`;
   a change to a class goes to both repositories.
 
