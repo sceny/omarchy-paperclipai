@@ -332,7 +332,7 @@ def read_event():
 
 def pull_request_number(event):
     """The pull request an event is about. A merge queue names it only in the group's
-    branch, gh-readonly-queue/<base>/pr-<number>-<head sha>: that run reads the text as
+    branch, gh-readonly-queue/<base>/pr-<number>-<base sha>: that run reads the text as
     it stands when the merge is asked for, so a review posted just before the merge is
     read before the merge lands, not by the push after it."""
     if event.get("pull_request"):
