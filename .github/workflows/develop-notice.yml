@@ -2,17 +2,11 @@ name: develop-notice
 
 # GitHub's failed-run notice goes only to the pusher's notification settings, so a red
 # public-text check on a push to develop opens an issue assigned to the pusher. Its own
-# workflow, on the push alone, keeps the public-text workflow read-only. A manual run with
-# a pull request number checks that pull request and files the same issue, to drill it.
+# workflow, on the push alone, keeps the public-text workflow read-only.
 
 on:
   push:
     branches: [develop]
-  workflow_dispatch:
-    inputs:
-      pr:
-        description: Pull request number to check
-        required: false
 
 permissions:
   contents: read
@@ -32,12 +26,9 @@ jobs:
       - name: Public text against the rules
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr }}
         run: |
           set -o pipefail
-          args=()
-          if [ -n "$PR_NUMBER" ]; then args=(--pr "$PR_NUMBER"); fi
-          python3 dev/public-text-check "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/public-text.txt"
+          python3 dev/public-text-check 2>&1 | tee "$RUNNER_TEMP/public-text.txt"
       - name: Tell a person that a push to develop broke the rules
         if: failure()
         env:
