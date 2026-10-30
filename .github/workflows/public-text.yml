@@ -8,6 +8,9 @@ name: public-text
 # is checked too; an open pull request is not the push's to fail. The pull request events
 # run from the merge ref, so this file works before a release reaches main; an
 # issue_comment run and a schedule take effect only from the default branch.
+# A merge_group run reads the pull request's text when the merge is asked for: a
+# review posted seconds before the merge starts its own run too late for the gate,
+# and the gate would pass on the run before it.
 
 on:
   pull_request:
@@ -20,6 +23,7 @@ on:
     types: [created, edited]
   push:
     branches: [develop]
+  merge_group:
 
 permissions:
   contents: read

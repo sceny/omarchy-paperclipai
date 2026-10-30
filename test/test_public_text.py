@@ -407,6 +407,11 @@ class Sources(unittest.TestCase):
         self.assertEqual(ptc.pull_request_number({"pull_request": {"number": 7}}), 7)
         self.assertIsNone(ptc.pull_request_number({"issue": {"number": 12}}))
 
+    def test_a_merge_group_names_the_pull_request_it_merges(self):
+        group = {"merge_group": {"head_ref": "refs/heads/gh-readonly-queue/develop/pr-81-eb79ec7d6265454a42894b05eaa6bddad4331f01"}}
+        self.assertEqual(ptc.pull_request_number(group), 81)
+        self.assertIsNone(ptc.pull_request_number({"merge_group": {"head_ref": "refs/heads/develop"}}))
+
 
 def checks_of(doc):
     return {(check, rule) for _, check, rule, _ in ptc.check_pull_request(RULES, doc)}
