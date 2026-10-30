@@ -8,6 +8,11 @@ name: release
 #   writes), the pushed commit is tagged vX.Y.Z, the release is published
 #   with that CHANGELOG section as its notes, and develop is brought level
 #   with main;
+# - develop takes changes only through its merge queue, and the GitHub Actions
+#   app cannot bypass that, so the push to develop goes with the deploy key in
+#   secret DEVELOP_SYNC_KEY, the ruleset's only bypass actor. The secret lives
+#   in environment `release`, which only main can deploy from: a job on any
+#   other branch cannot read the key;
 # - a release that reaches main as a single-parent commit (a squash or a
 #   rebase) fails the publish job once it is tagged: the release pull request
 #   is merged with a merge commit. GitHub offers no per-pull-request check of
@@ -55,6 +60,7 @@ jobs:
   publish:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       statuses: write
@@ -88,6 +94,7 @@ jobs:
         if: steps.version.outputs.tagged == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          DEVELOP_SYNC_KEY: ${{ secrets.DEVELOP_SYNC_KEY }}
         run: |
           git fetch origin develop
           if git merge-base --is-ancestor origin/develop "$GITHUB_SHA"; then
@@ -95,7 +102,19 @@ jobs:
             # this commit is a push to main with no pull request text to read
             gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=success -f context=public-text \
               -f description="A push to main: no pull request text to check"
-            git push origin "$GITHUB_SHA:refs/heads/develop"
+            if [ -z "$DEVELOP_SYNC_KEY" ]; then
+              echo "::error::No DEVELOP_SYNC_KEY in environment release: develop is not brought level with main"
+              exit 1
+            fi
+            ssh_dir="$RUNNER_TEMP/develop-sync"
+            mkdir -m 700 "$ssh_dir"
+            printf '%s\n' "$DEVELOP_SYNC_KEY" > "$ssh_dir/key"
+            chmod 600 "$ssh_dir/key"
+            # github.com's host keys as GitHub publishes them over HTTPS
+            gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
+            GIT_SSH_COMMAND="ssh -l git -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
+              git push "ssh://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA:refs/heads/develop"
+            rm -rf "$ssh_dir"
           else
             echo "::warning::develop has commits main does not; merge main into develop by hand"
           fi

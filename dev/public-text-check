@@ -10,8 +10,9 @@ dev/public-text-rules.json:
   unlinked-reference       names another repository's issue without its owner
 
   dev/public-text-check --pr 123 [--repo owner/name]   read the pull request (GITHUB_TOKEN)
-  dev/public-text-check                                inside Actions: the event's pull request, or on a push
-                                                       the commits it brings and the pull requests it touched
+  dev/public-text-check                                inside Actions: the event's pull request (a merge
+                                                       group's too), or on a push the commits it brings and
+                                                       the pull requests it touched
   dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
   dev/public-text-check --standing                     the same rules on the standing texts
 
@@ -330,8 +331,15 @@ def read_event():
 
 
 def pull_request_number(event):
+    """The pull request an event is about. A merge queue names it only in the group's
+    branch, gh-readonly-queue/<base>/pr-<number>-<base sha>: that run reads the text as
+    it stands when the merge is asked for, so a review posted just before the merge is
+    read before the merge lands, not by the push after it."""
     if event.get("pull_request"):
         return event["pull_request"]["number"]
+    group = re.search(r"/pr-(\d+)-[0-9a-f]+$", (event.get("merge_group") or {}).get("head_ref", ""))
+    if group:
+        return int(group.group(1))
     issue = event.get("issue") or {}
     return issue.get("number") if issue.get("pull_request") else None
 
