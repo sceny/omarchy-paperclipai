@@ -1,0 +1,50 @@
+name: develop-notice
+
+# GitHub's failed-run notice goes only to the pusher's notification settings, so a red
+# public-text check on a push to develop opens an issue assigned to the pusher. Its own
+# workflow, on the push alone, keeps the public-text workflow read-only.
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  notice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Public text against the rules
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python3 dev/public-text-check 2>&1 | tee "$RUNNER_TEMP/public-text.txt"
+      - name: Tell a person that a push to develop broke the rules
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="$RUNNER_TEMP/public-text-notice.md"
+          {
+            echo "The \`public-text\` check failed on a push to \`develop\`. The commit is ${COMMIT_URL} and the run is ${RUN_URL}."
+            echo
+            echo "Check output:"
+            echo
+            sed 's/^/    /' "$RUNNER_TEMP/public-text.txt"
+            echo
+            echo "Edit the text that failed, or record here why it stays."
+          } > "$body"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "public-text failed on develop" --body-file "$body" --assignee "$ACTOR"
