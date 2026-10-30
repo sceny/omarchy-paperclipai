@@ -112,8 +112,8 @@ jobs:
             chmod 600 "$ssh_dir/key"
             # github.com's host keys as GitHub publishes them over HTTPS
             gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
-            GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
-              git push "git@github.com:$GITHUB_REPOSITORY.git" "$GITHUB_SHA:refs/heads/develop"
+            GIT_SSH_COMMAND="ssh -l git -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
+              git push "ssh://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA:refs/heads/develop"
             rm -rf "$ssh_dir"
           else
             echo "::warning::develop has commits main does not; merge main into develop by hand"
