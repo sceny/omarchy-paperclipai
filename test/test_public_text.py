@@ -355,7 +355,7 @@ class Sources(unittest.TestCase):
 
     def test_a_push_to_develop_reads_the_commit_message_that_lands(self):
         responses = {
-            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}]},
+            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"sha": "ccc", "html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}]},
             "/repos/%s/commits/aaa" % self.REPO: {"commit": {"committer": {"date": "2026-10-22T00:00:00Z"}}},
             "/repos/%s/pulls" % self.REPO: [],
         }
@@ -363,21 +363,39 @@ class Sources(unittest.TestCase):
         self.assertEqual(texts, [{"url": self.COMMIT_URL, "body": self.SQUASH}])
         self.assertEqual(docs, [])
 
-    def test_a_push_to_develop_reads_the_comments_on_pull_requests_updated_since_before(self):
-        old = dict(self.PR, number=50, updated_at="2026-10-20T00:00:00Z", html_url="https://github.com/sceny/omarchy-paperclipai/pull/50")
-        new = dict(self.PR, number=62, updated_at="2026-10-23T09:00:00Z")
+    def test_a_push_to_develop_reads_the_comments_on_the_pull_request_it_merged(self):
+        merged = dict(self.PR, number=62, state="closed", merged_at="2026-10-23T09:00:00Z", merge_commit_sha="sss",
+                      html_url="https://github.com/sceny/omarchy-paperclipai/pull/62")
         comment = {"html_url": "https://github.com/sceny/omarchy-paperclipai/pull/62#issuecomment-1", "body": "Not checked on the phone."}
         responses = {
-            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": []},
-            "/repos/%s/commits/aaa" % self.REPO: {"commit": {"committer": {"date": "2026-10-22T00:00:00Z"}}},
-            "/repos/%s/pulls" % self.REPO: [new, old],
-            "/repos/%s/pulls/62" % self.REPO: new,
+            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"sha": "sss", "html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}]},
+            "/repos/%s/commits/sss/pulls" % self.REPO: [merged],
+            "/repos/%s/pulls/62" % self.REPO: merged,
             "/repos/%s/issues/62/comments" % self.REPO: [comment],
         }
         _, _, docs = self.push(responses)
-        self.assertEqual([doc["texts"][0]["url"] for doc in docs], [new["html_url"]])
+        self.assertEqual([doc["texts"][0]["url"] for doc in docs], [merged["html_url"]])
         self.assertIn((comment["html_url"], OPEN, "not-checked"),
                       [(url, c, r) for url, c, r, _ in ptc.check_pull_request(RULES, docs[0])])
+
+    def test_a_push_to_develop_does_not_read_a_pull_request_it_did_not_merge(self):
+        # An open pull request updated after the commit before the push, and one that
+        # carries a commit of the push but was merged by another: neither is this push's.
+        bad = "Not checked on the phone."
+        opened = dict(self.PR, number=901, state="open", merged_at=None, merge_commit_sha="ooo", body=bad,
+                      updated_at="2026-10-23T09:00:00Z", html_url="https://github.com/sceny/omarchy-paperclipai/pull/901")
+        earlier = dict(self.PR, number=902, state="closed", merged_at="2026-10-01T00:00:00Z", merge_commit_sha="eee", body=bad,
+                       updated_at="2026-10-23T09:00:00Z", html_url="https://github.com/sceny/omarchy-paperclipai/pull/902")
+        responses = {
+            "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"sha": "sss", "html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}]},
+            "/repos/%s/commits/aaa" % self.REPO: {"commit": {"committer": {"date": "2026-10-22T00:00:00Z"}}},
+            "/repos/%s/commits/sss/pulls" % self.REPO: [opened, earlier],
+            "/repos/%s/pulls" % self.REPO: [opened, earlier],
+            "/repos/%s/pulls/901" % self.REPO: opened,
+            "/repos/%s/pulls/902" % self.REPO: earlier,
+        }
+        _, _, docs = self.push(responses)
+        self.assertEqual(docs, [])
 
     def test_a_comment_on_a_pull_request_names_its_number(self):
         self.assertEqual(ptc.pull_request_number({"issue": {"number": 301, "pull_request": {"url": "x"}}}), 301)
