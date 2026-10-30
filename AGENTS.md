@@ -93,6 +93,11 @@ without its owner. Write them so (`docs/internals/releasing.md`, *Public text
 of a pull request*); `dev/public-text-check --pr N` (with `GITHUB_TOKEN`)
 reads a pull request's text against the rules.
 
+A review is posted with `gh pr review <n> --comment --body …`, never `gh pr
+comment`. Until `main` carries `public-text.yml`, only a review starts
+`public-text` on the pull request's head before the merge; a plain comment is
+first read after it.
+
 ## Releasing
 
 Releasing a version to Omarchy is always the owner's call. The steps below run
