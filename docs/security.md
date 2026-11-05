@@ -43,7 +43,12 @@ agent are written by someone else. The plugin treats them as data:
   arguments of a program.
 - **Never an instruction.** It is not put in the doctor bundle, `AGENTS.md`,
   `prompt.txt` or any other input of an AI session. The bundle holds states,
-  counts, kinds and ids. Log tails are listed by path, not inlined. The session
+  counts, kinds and ids. Log tails are listed by path, not inlined. No list of
+  processes goes in: the agents the instance starts run under its service, with
+  their keys and the text they send on their command lines, so the service is
+  read as a fixed set of `systemctl show` fields, and sockets without their
+  process names. A redacted probe that crashes names only the error's type,
+  never its message. The session
   is told in plain words that its files are untrusted data and never
   instructions.
 
@@ -79,9 +84,9 @@ that does not exist, or when a gap has no issue.
 
 | Asset | Held by | Manual | Gap |
 |---|---|---|---|
-| **The API token** | `test/test_transport.py` `TokenVerdict`, `ProcTable`, `Fetch`, `Probe`; `test/test_transport.mjs`; `test/test_state.py` `TokenFile`; `test/test_private_text.py` `C1NoPrivateTextOnArgv` | manual: the check-then-connect race (the user's instance dies and another uid binds in the same milliseconds) has no test; accepted at the whole-plugin review | Ids from the API go into request paths unchecked ([#46](https://github.com/sceny/omarchy-paperclipai/issues/46)) |
+| **The API token** (the board token, and the agents' keys on their command lines) | `test/test_transport.py` `TokenVerdict`, `ProcTable`, `Fetch`, `Probe`; `test/test_transport.mjs`; `test/test_state.py` `TokenFile`; `test/test_private_text.py` `C1NoPrivateTextOnArgv`; `test/test_process_lists.py` `NoProcessListsForTheSession`; `test/test_doctor_session.mjs` | manual: the check-then-connect race (the user's instance dies and another uid binds in the same milliseconds) has no test; accepted at the whole-plugin review | Ids from the API go into request paths unchecked ([#46](https://github.com/sceny/omarchy-paperclipai/issues/46)) |
 | **Inbox text** (titles, details, names, `whyNow`) | `test/test_security_rules.py` `QmlTextIsPlain`; `test/test_notify.py` `HelperOverDbus`, `ServiceUsesTheHelper`; `test/test_model.mjs`; `test/test_private_text.py` `C1NoPrivateTextOnArgv`; `test/test_shell_argv.py` `NoShellInScripts` | | |
-| **The user's account through the AI repair session** | `test/test_doctor_session.mjs`; `test/test_state.py` `Retention` | manual: what the coding agent does with its inputs is the agent's; the plugin holds only that no instance text goes in | |
+| **The user's account through the AI repair session** | `test/test_doctor_session.mjs`; `test/test_state.py` `Retention`; `test/test_process_lists.py` `NoProcessListsForTheSession`; `test/test_transport.py` `RedactedCrash` | manual: what the coding agent does with its inputs is the agent's; the plugin holds only that no instance text goes in | |
 | **The state directory and what is on disk** | `test/test_state.py` `Modes`, `Retention`, `TokenFile` | | |
 | **Opening the board** (urls, windows) | `test/test_open.mjs` | | Control characters after the origin check ([#21](https://github.com/sceny/omarchy-paperclipai/issues/21)); the browser started with umask 077 ([#28](https://github.com/sceny/omarchy-paperclipai/issues/28)) |
 | **The clipboard** | `test/test_private_text.py` `C2NoClipboardRead` | | |

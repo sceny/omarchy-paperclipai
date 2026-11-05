@@ -52,7 +52,7 @@ paperclipai service logs                  # its logs
 paperclipai service restart
 paperclipai run                            # run in the foreground to see the real error
 omarchy-shell shell rescanPlugins          # reload the bar widget
-systemctl --user status paperclipai.service
+systemctl --user show paperclipai.service --property=LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus,NRestarts,MainPID
 journalctl --user -u paperclipai.service -n 100 --no-pager
 ```
 
@@ -84,4 +84,9 @@ cause of an instance that starts and dies at once.
 - Do not reinstall or reset the instance to clear a fault you have not named.
 - Explain each change before you make it.
 - Stop and report if the fix needs a password, a token, or a paid account.
+- Do not list the service's processes or read their command lines. Every agent
+  Paperclip starts runs under the service, and its command line carries its API
+  key and the text it is sending. The fixed fields of `systemctl --user show`
+  above are the service's state. If the fault needs the process list, ask the
+  user first.
 - The user is at the keyboard. Ask them when a choice is theirs to make.
