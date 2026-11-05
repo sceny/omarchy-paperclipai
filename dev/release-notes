@@ -5,6 +5,10 @@
 set -euo pipefail
 notes=${1:?usage: dev/release-notes <notes-file>}
 version=$(jq -r .version manifest.json)
+if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "release-notes: manifest.json's version '$version' is not X.Y.Z" >&2
+  exit 1
+fi
 # The section under "## X.Y.Z — date", up to the next "## ", without the
 # blank lines around it.
 awk -v v="$version" '
