@@ -22,6 +22,7 @@ run python3 test/test_security_rules.py
 run python3 test/test_private_text.py
 run python3 test/test_tree_data.py
 run python3 test/test_shell_argv.py
+run python3 test/test_process_lists.py
 run python3 test/test_state.py
 run python3 test/test_notify.py
 run python3 test/test_service.py

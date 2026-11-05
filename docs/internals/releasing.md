@@ -204,6 +204,19 @@ at the call catches the next variant.
    name, a home path other than a placeholder, or an email address outside the
    allowlist. A made-up value passes; a new fixture goes on the lint's allowlist.
    Check: [`test/test_tree_data.py`](../../test/test_tree_data.py).
+10. **No list of processes reaches an AI session.**
+   Every agent the instance starts, and every command an agent runs, is a
+   process of its service, and its command line carries the agent's key and the
+   text it is sending. Nothing in `bin/`, `lib/` or `skills/` runs a tool that
+   prints processes or their command lines (`systemctl status`, `systemd-cgls`,
+   `ps`, `pgrep -a`, `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`)
+   unless the line is on the allowlist with a reason. The doctor reads the
+   service through `systemctl show` and a fixed list of properties, never
+   `ExecStart` or `Environment`. A crash of the redacted probe names only the
+   exception's type, and a number from the server is read as a number or as 0.
+   Check: [`test/test_process_lists.py`](../../test/test_process_lists.py),
+   [`test/test_doctor_session.mjs`](../../test/test_doctor_session.mjs),
+   [`test/test_transport.py`](../../test/test_transport.py).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a

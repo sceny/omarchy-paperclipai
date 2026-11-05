@@ -135,10 +135,15 @@ collect() {
   tail -n 80 "$log" 2>/dev/null | untrusted >>"$bundle"
 
   # The service's own log lines carry whatever the instance printed, issue
-  # titles included, so none of them are inlined: not here, not by `status -n`.
+  # titles included, so none of them are inlined. `systemctl status` is not
+  # used either: it prints the unit's process tree, every agent's command line
+  # in full, keys and text on argv included. These fixed fields are all of it,
+  # never ExecStart or Environment.
   section "service"
   if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user status paperclipai.service --no-pager -n 0 >>"$bundle" 2>&1
+    local fields=LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus,NRestarts,MainPID
+    systemctl --user show paperclipai.service --property="$fields" 2>/dev/null |
+      grep -E "^(${fields//,/|})=[A-Za-z0-9._-]*$" >>"$bundle"
     {
       echo "The service journal is not inlined. Read it only when the fault needs it:"
       echo "  journalctl --user -u paperclipai.service -n 100 --no-pager"
@@ -155,8 +160,9 @@ collect() {
     echo "  $file" >>"$bundle"
   done
 
+  # No -p: it names each socket's process, a name any process can set.
   section "listening sockets"
-  (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep -E "3100|LISTEN" >>"$bundle" 2>&1
+  (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -E "3100|LISTEN" >>"$bundle" 2>&1
 }
 
 print_status() {

@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import re
 import shutil
@@ -89,6 +90,8 @@ SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
 # No answer from the API is anywhere near this large. A bigger body is a fault
 # or a hostile listener, and either way is not read to the end.
 MAX_BODY_BYTES = 4 * 1024 * 1024
+# The largest count a report carries. Anything bigger is not a real inbox.
+MAX_COUNT = 10**9
 PROC_TCP_FILES = ("/proc/net/tcp", "/proc/net/tcp6")
 TCP_LISTEN = "0A"
 
@@ -436,6 +439,20 @@ def safe_token(value) -> str:
     return text if SAFE_TOKEN.match(text) else ""
 
 
+def to_int(value) -> int:
+    """A count from the server, or 0 when it is not one. Never raises: an
+    exception's message would carry the server's text into the report."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, float) and math.isfinite(value):
+        value = int(value)
+    elif isinstance(value, str) and re.fullmatch(r"[0-9]{1,9}", value.strip()):
+        value = int(value.strip())
+    if not isinstance(value, int):
+        return 0
+    return max(0, min(MAX_COUNT, value))
+
+
 def short(text, limit: int = 120) -> str:
     value = " ".join(str(text or "").split())
     return value if len(value) <= limit else value[: limit - 1] + "…"
@@ -561,7 +578,7 @@ def company_needs(api: Api, company: dict, keep: int, now: float, inbox_filter: 
         # A timeout here used to read as "nothing is waiting", which quietly
         # shrinks the number the bubble shows. Say the call failed instead.
         return None, {}, []
-    total = int(feed.get("totalCount") or 0)
+    total = to_int(feed.get("totalCount"))
     counts = feed.get("countsBySourceKind")
     counts = counts if isinstance(counts, dict) else {}
     rows = []
@@ -704,7 +721,7 @@ def derive_state(report: dict) -> None:
         report["summary"] = "All quiet"
 
 
-def main(argv=None) -> int:
+def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=True, description=__doc__.splitlines()[0])
     parser.add_argument("--api-base", default="", help="Paperclip API base URL")
     parser.add_argument("--instance", default="", help="local instance id (default: default)")
@@ -727,8 +744,14 @@ def main(argv=None) -> int:
                              "The shell scripts' only way to talk to the instance.")
     parser.add_argument("--redacted", action="store_true",
                         help="leave out every title, detail, name and url. For anything an AI session reads.")
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
+
+def main(argv=None) -> int:
+    return probe(parse_args(argv))
+
+
+def probe(args: argparse.Namespace) -> int:
     os.umask(0o077)
     instance = args.instance or env("PAPERCLIP_OMARCHY_INSTANCE", "default")
     if args.get:
@@ -816,10 +839,7 @@ def main(argv=None) -> int:
             report["needs"].extend(needs)
             report["moving"].extend(moving)
             for kind, value in counts.items():
-                try:
-                    report["inboxCounts"][kind] = report["inboxCounts"].get(kind, 0) + int(value)
-                except (TypeError, ValueError):
-                    continue
+                report["inboxCounts"][kind] = report["inboxCounts"].get(kind, 0) + to_int(value)
             report["companies"].append({
                 "id": str(company.get("id")),
                 "name": str(company.get("name") or ""),
@@ -849,16 +869,26 @@ def main(argv=None) -> int:
     return 0
 
 
+def crash_report(error: BaseException, redacted: bool) -> dict:
+    """What a crash prints. An exception's message can carry text the server
+    sent, so a redacted report names only the exception's type."""
+    problem = type(error).__name__
+    if not redacted:
+        problem += ": %s" % error
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "state": "probe-failed",
+        "summary": "Status probe failed",
+        "problems": [problem],
+    }
+
+
 if __name__ == "__main__":
+    options = parse_args()
     try:
-        sys.exit(main())
+        sys.exit(probe(options))
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as error:  # the widget must always get JSON back
-        print(json.dumps({
-            "schemaVersion": SCHEMA_VERSION,
-            "state": "probe-failed",
-            "summary": "Status probe failed",
-            "problems": ["%s: %s" % (type(error).__name__, error)],
-        }))
+        print(json.dumps(crash_report(error, options.redacted)))
         sys.exit(2)
