@@ -128,11 +128,10 @@ dev/release-prepare 0.2.1 --from main --note "What the fix does"  # fix-0.2.1 fr
 - Tested in `test/test_release_prepare.py`, which runs `dev/release-notes`,
   the `release` workflow's own extraction, on what the script wrote.
 
-The release pull request into `main` is merged with a merge commit. GitHub has
-no per-pull-request check of the merge method, so the pull request's `release`
-check prints a reminder and the `release` run on `main` fails, after tagging
-and publishing, when the tagged commit has one parent. Merge `main` into
-`develop` meanwhile and use a merge commit for the next release.
+The release pull request into `main` is merged with a merge commit. The ruleset
+on `main` allows that method only, so GitHub refuses a squash or a rebase before
+the merge. The `release` run on `main` checks it again after tagging, as a
+second check: a single-parent commit fails there.
 
 ## Every pull request
 
@@ -264,13 +263,25 @@ Run it on any commit (a candidate) by hand, as R3 does:
 
 ```bash
 git clone --depth 1 https://github.com/omacom/omarchy-plugin-marketplace /tmp/mp
-(cd /tmp/mp && npm ci)
+(cd /tmp/mp && npm ci --ignore-scripts)
 GITHUB_TOKEN=$(gh auth token) MARKETPLACE_DIR=/tmp/mp node dev/marketplace-check.mjs <full-sha> /tmp/reports
 ```
 
 Exit 0: both ran. 1: the marketplace would answer *needs fixes*. 2: the check
 could not complete. *Run workflow* on the `marketplace-check` workflow does the
 same for any commit once the workflow is on `main`.
+
+## Required checks on `main`
+
+The ruleset on `main` requires `check`, `public-text`, `test` and `marketplace-check`
+on every pull request into it. Merge commits are the only merge method, and
+force pushes, deletions and bypasses are refused. The names are job ids: `check`
+is the `release` workflow's job for a release pull request.
+
+A pull request runs the workflow files of its own head, so a `fix-X.Y.Z` branch
+cut from `main` has none of these checks while `main` has no workflow files. Until
+that is fixed ([#92](https://github.com/sceny/omarchy-paperclipai/issues/92)), take
+`.github/` from `develop` into the fix branch before its pull request is opened.
 
 ## Regression in the rig
 
@@ -455,6 +466,11 @@ The owner answers go or not for this release on that request.
 - The first marketplace submission is a request of its own on the go: the
   owner confirms the five statements of the submission checklist, and sees the
   issue's title and body before it is created.
+
+The go is recorded on the release status page before anything else. The
+environment `release` then waits for the owner's approval on the publish run
+(the job reads the develop key only after it), so the approval comes after the
+go, never before it.
 
 Then *Releasing* steps 2 to 6 run as written.
 

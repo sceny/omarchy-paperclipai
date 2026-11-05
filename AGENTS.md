@@ -220,7 +220,7 @@ in order; the detail, the checklist and the record templates are in
    *Release X.Y.Z* (`gh pr create --base main --head develop`), CI green,
    merged with a merge commit, never squashed, so both branches keep one
    history (a single-parent commit on `main` fails the `release` run after it
-   tags). The `release` check on that pull request fails while the version in
+   tags). The `check` job of the `release` workflow fails while the version in
    `manifest.json` is already tagged or has no CHANGELOG section with entries.
    The `marketplace-check` job runs the marketplace's own validation and
    security baseline on the same head and fails where its bots would
@@ -228,6 +228,8 @@ in order; the detail, the checklist and the record templates are in
 3. **The `release` workflow tags and publishes** when the merge lands on
    `main`: it tags the merge commit `vX.Y.Z`, publishes the release with that
    CHANGELOG section as its notes, and brings `develop` level with `main`.
+   Its publish job waits in environment `release` for the owner's approval,
+   given only after the go is on the release status page.
    Check it ran (`gh run list --workflow release --limit 1`,
    `gh release view vX.Y.Z`). If it failed, do what it does by hand:
 
