@@ -1,6 +1,7 @@
 """dev/release-prepare in a throwaway repository with its own origin, and the
 release workflow's notes extraction run on what it wrote."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -135,6 +136,17 @@ class ReleasePrepare(unittest.TestCase):
         done = self.run_script("0.9.0")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("no entries", done.stderr)
+
+    def test_release_notes_refuses_a_version_that_is_not_x_y_z(self):
+        notes = os.path.join(self.tmp.name, "notes.md")
+        for version in ["0.9", "v0.9.0", "0.9.0-rc1", "0.9.0.1", ""]:
+            with self.subTest(version=version):
+                with open(os.path.join(self.work, "manifest.json"), "w") as handle:
+                    handle.write(json.dumps({"id": "sceny.test", "version": version}))
+                done = subprocess.run([RELEASE_NOTES, notes], cwd=self.work, env=ENV, capture_output=True, text=True)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("is not X.Y.Z", done.stderr)
+                self.assertFalse(os.path.exists(notes))
 
     def test_existing_branch_and_dirty_tree_are_refused(self):
         git(self.work, "branch", "release-0.9.0", "main")
