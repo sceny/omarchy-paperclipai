@@ -430,6 +430,8 @@ maintainer's review.
   Otherwise that code is read again.
 - An unfixed vulnerability stays off public GitHub (issues, commits, pull
   request text) until its fix is released.
+  Its task gets a neutral title, because the workspace branch is named from
+  the task's title.
 
 The verdict is a document on the release task: pass, or findings with file
 and line. Findings are fixed on `develop`; a fix changes the candidate, so the

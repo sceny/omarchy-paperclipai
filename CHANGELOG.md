@@ -42,6 +42,14 @@ GitHub release with these notes.
 
 ### Security
 
+- **The doctor bundle keeps the service's state only**: in 0.2.0 the bundle
+  could carry the service's process command lines, agents' keys included, and
+  the `--redacted` status check's failure report could carry the server's text.
+  The bundle now keeps the service unit's state fields only, and the failure
+  report names only the error's type
+  ([#93](https://github.com/sceny/omarchy-paperclipai/pull/93)).
+  **If you shared a doctor bundle made with 0.2.0, treat the agent keys in it
+  as exposed and rotate them.**
 - **Urls open only on the instance's own origin**: a url from the instance
   that points anywhere else is not opened.
 - **API clients are boxed in**: no redirect is followed, and nothing is sent,
@@ -61,6 +69,9 @@ GitHub release with these notes.
 - The isolated rig (`dev/rig`) runs hidden by default, with one owner and a
   lease, so it leaves no stray process behind.
 - CI runs every check that needs no desktop on each push and pull request.
+- `main` is protected: a ruleset, a `release` environment the owner approves,
+  a read-only default token, and a release version check
+  ([#94](https://github.com/sceny/omarchy-paperclipai/pull/94)).
 
 ### Upgrading
 
@@ -94,11 +105,13 @@ GitHub release with these notes.
 - [#67](https://github.com/sceny/omarchy-paperclipai/pull/67) Keep Paperclip running respects a stop on every screen and starts once
 - [#2](https://github.com/sceny/omarchy-paperclipai/pull/2), [#4](https://github.com/sceny/omarchy-paperclipai/pull/4), [#47](https://github.com/sceny/omarchy-paperclipai/pull/47) Follow develop: a user timer keeps installed plugins current and restarts the shell after an update
 - [#6](https://github.com/sceny/omarchy-paperclipai/pull/6) Doctor bundle: keep inbox text out of the agent session
+- [#93](https://github.com/sceny/omarchy-paperclipai/pull/93) Doctor bundle: the service unit's state fields only; `--redacted` failures name only the error type
 - [#7](https://github.com/sceny/omarchy-paperclipai/pull/7), [#34](https://github.com/sceny/omarchy-paperclipai/pull/34), [#41](https://github.com/sceny/omarchy-paperclipai/pull/41) API clients and scripts: no redirects, no request to a foreign listener on Paperclip's port
 - [#9](https://github.com/sceny/omarchy-paperclipai/pull/9) Open only urls on the instance's own origin
 - [#11](https://github.com/sceny/omarchy-paperclipai/pull/11) Notifications: text goes over D-Bus, not argv
 - [#10](https://github.com/sceny/omarchy-paperclipai/pull/10), [#12](https://github.com/sceny/omarchy-paperclipai/pull/12), [#33](https://github.com/sceny/omarchy-paperclipai/pull/33), [#43](https://github.com/sceny/omarchy-paperclipai/pull/43) CI workflow and class lints: private text on argv, clipboard reads, shell strings in scripts
 - [#13](https://github.com/sceny/omarchy-paperclipai/pull/13), [#15](https://github.com/sceny/omarchy-paperclipai/pull/15), [#16](https://github.com/sceny/omarchy-paperclipai/pull/16) Release tooling and the release template: CHANGELOG, release workflow, `dev/release-prepare`, marketplace check, the contributor code rule
+- [#94](https://github.com/sceny/omarchy-paperclipai/pull/94) Protect `main`: rulesets, release environment, read-only token, release version check
 - [#32](https://github.com/sceny/omarchy-paperclipai/pull/32), [#64](https://github.com/sceny/omarchy-paperclipai/pull/64), [#66](https://github.com/sceny/omarchy-paperclipai/pull/66), [#81](https://github.com/sceny/omarchy-paperclipai/pull/81), [#83](https://github.com/sceny/omarchy-paperclipai/pull/83), [#86](https://github.com/sceny/omarchy-paperclipai/pull/86), [#87](https://github.com/sceny/omarchy-paperclipai/pull/87) The `public-text` check and the merge queue on `develop`
 - [#1](https://github.com/sceny/omarchy-paperclipai/pull/1), [#8](https://github.com/sceny/omarchy-paperclipai/pull/8), [#14](https://github.com/sceny/omarchy-paperclipai/pull/14), [#48](https://github.com/sceny/omarchy-paperclipai/pull/48), [#56](https://github.com/sceny/omarchy-paperclipai/pull/56), [#63](https://github.com/sceny/omarchy-paperclipai/pull/63), [#71](https://github.com/sceny/omarchy-paperclipai/pull/71), [#72](https://github.com/sceny/omarchy-paperclipai/pull/72), [#74](https://github.com/sceny/omarchy-paperclipai/pull/74) Rig and sandbox: hidden by default, a private session bus, seeding, start and teardown evidence
 - [#70](https://github.com/sceny/omarchy-paperclipai/pull/70), [#82](https://github.com/sceny/omarchy-paperclipai/pull/82), [#88](https://github.com/sceny/omarchy-paperclipai/pull/88) README and AGENTS.md: Sceny and Learning Sceny, reviews as pull-request reviews
