@@ -49,7 +49,8 @@ jobs:
 
       - name: Install the marketplace's dependencies
         working-directory: marketplace
-        run: npm ci
+        # No dependency's install script runs on this runner; the check runs without them.
+        run: npm ci --ignore-scripts
 
       - name: Validate the commit and run the security baseline
         id: check

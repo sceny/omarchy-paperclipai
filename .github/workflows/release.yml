@@ -11,12 +11,11 @@ name: release
 # - develop takes changes only through its merge queue, and the GitHub Actions
 #   app cannot bypass that, so the push to develop goes with the deploy key in
 #   secret DEVELOP_SYNC_KEY, the ruleset's only bypass actor. The secret lives
-#   in environment `release`, which only main can deploy from: a job on any
-#   other branch cannot read the key;
-# - a release that reaches main as a single-parent commit (a squash or a
-#   rebase) fails the publish job once it is tagged: the release pull request
-#   is merged with a merge commit. GitHub offers no per-pull-request check of
-#   the merge method, so it is caught here, after the merge.
+#   in environment `release`, which only main can deploy from and which waits
+#   for the owner's approval before a job reads the key;
+# - main's ruleset allows only merge commits, so a squash or a rebase of the
+#   release pull request is refused before the merge. The publish job still
+#   fails a single-parent commit on main, once it is tagged, as a second check.
 # `dev/release-prepare X.Y.Z` makes a branch that passes the first check.
 # Two jobs because GitHub takes no expression under `permissions`: a file
 # with one fails every run in 0 s.
