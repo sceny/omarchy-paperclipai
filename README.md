@@ -4,6 +4,8 @@ A bar widget for the Omarchy shell that shows what your Paperclip agents are
 doing and what is waiting for you, plus helper scripts that keep a Paperclip
 instance running.
 
+Made by [Sceny](https://sceny.github.io/?from=paperclip). Try the [Learning Sceny beta](https://sceny.github.io/?from=paperclip#beta): a study app that gives each new word a memory link, and fades it out when you no longer need it.
+
 ## Install
 
 ```sh
@@ -412,5 +414,3 @@ It proves install, enable, disable, remove, script behaviour and that the shell
 loads the plugin. How the panel looks and behaves is Panel QA's call: bring the
 rig up with `dev/sandbox dev up`, take screenshots with `dev/sandbox dev shot`,
 and read them with `dev/sandbox dev pull`. The owner looks at those, never at a live rig.
-
-Made by [Sceny](https://sceny.github.io/?from=paperclip): AI that makes you more able. Also from Sceny: [Learning Sceny](https://sceny.github.io/?from=paperclip#beta), a study app whose memory links fade as you learn.
