@@ -3,7 +3,8 @@
 
 A pull request's public text is its body, every comment, every review and every
 review comment. Three checks read it, with their patterns in
-dev/public-text-rules.json:
+dev/public-text-rules.json (the environment check reads HTML comments too, since
+they are public in the text's source):
 
   public-text-environment  names how or where we worked (tools, paths, test counts)
   open-item-no-owner       says something is left, with no issue reference
@@ -57,9 +58,11 @@ def shown(text):
     return text if len(text) <= MAX_SHOWN else text[: MAX_SHOWN - 3] + "..."
 
 
-def blank_fences(text):
-    """The text with fenced code blocks and HTML comments emptied, line for line."""
-    text = HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+def blank_fences(text, comments=True):
+    """The text with fenced code blocks emptied, line for line, and its HTML
+    comments too unless `comments` is False (the comment's text is then read)."""
+    if comments:
+        text = HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
     out, fenced = [], False
     for line in text.split("\n"):
         if FENCE.match(line):
@@ -90,16 +93,16 @@ def sentence_of(line, start, end):
     return line[lo:hi]
 
 
-def find_all(patterns, text, changed_files=(), quoting_files=()):
+def find_all(patterns, text, changed_files=(), quoting_files=(), read_comments=False):
     """(rule id, matched text) for every pattern match in the text's lines, after
     the exceptions of the pattern: words in the sentence of the match
     (unless_sentence), the words just before it (unless_before), its own matched
     text (unless_match) and the files the pull request changes
     (allowed_when_changed: a pull request about a tool may name it; a pattern
     marked `quoted` is also allowed by `quoting_files`, the files that hold the
-    rules and quote their words)."""
+    rules and quote their words). `read_comments` reads the text of HTML comments."""
     found = []
-    lines = [URL.sub(" ", line) for line in blank_fences(text)]
+    lines = [URL.sub(" ", line) for line in blank_fences(text, comments=not read_comments)]
     for pat in patterns:
         if changes_any(changed_files, pat.get("allowed_when_changed", [])):
             continue
@@ -211,21 +214,34 @@ def check_open_items(rules, text):
     return found
 
 
-def check_text(rules, text, changed_files=()):
-    """[(check, rule id, matched text)] for one public text."""
+def find_unlinked(patterns, text, changed_files=()):
+    """(rule id, matched text) for each reference to another repository's issue that
+    GitHub does not link. Inline code is blanked first, unless the pattern
+    `reads_code`: one that finds a repository named in code just before a bare #n."""
+    found = []
+    for pat in patterns:
+        lines = blank_fences(text) if pat.get("reads_code") else [INLINE_CODE.sub(" ", line) for line in blank_fences(text)]
+        found += find_all([pat], "\n".join(lines), changed_files)
+    return found
+
+
+def check_text(rules, text, changed_files=(), may_quote=True):
+    """[(check, rule id, matched text)] for one public text. `may_quote` lets a
+    pull request that changes the rules quote the words of a `quoted` pattern: only
+    its body and its commits do, never a review or a comment."""
     problems = []
     env = rules["environment"]
-    for rule_id, matched in find_all(env["patterns"], text, changed_files, env.get("quoted_when_changed", [])):
+    quoting = env.get("quoted_when_changed", []) if may_quote else ()
+    for rule_id, matched in find_all(env["patterns"], text, changed_files, quoting, read_comments=True):
         problems.append((rules["environment"]["check"], rule_id, matched))
     for rule_id, matched in check_open_items(rules["open_item"], text):
         problems.append((rules["open_item"]["check"], rule_id, matched))
-    unlinked = []
-    for pat in rules["unlinked_reference"]["patterns"]:
-        lines = [INLINE_CODE.sub(" ", line) for line in blank_fences(text)]
-        unlinked += find_all([pat], "\n".join(lines), changed_files)
-    for rule_id, matched in unlinked:
+    for rule_id, matched in find_unlinked(rules["unlinked_reference"]["patterns"], text, changed_files):
         problems.append((rules["unlinked_reference"]["check"], rule_id, matched))
     return problems
+
+
+QUOTING_KINDS = ("body", "commit")
 
 
 def check_pull_request(rules, doc):
@@ -233,15 +249,18 @@ def check_pull_request(rules, doc):
     files = doc.get("changed_files", [])
     problems = []
     for item in doc["texts"]:
-        for check, rule_id, matched in check_text(rules, item.get("body") or "", files):
+        may_quote = item.get("kind") in QUOTING_KINDS
+        for check, rule_id, matched in check_text(rules, item.get("body") or "", files, may_quote):
             problems.append((item["url"], check, rule_id, matched))
     return problems
 
 
 def check_standing(rules, root=ROOT):
     """[(path:line, check, rule id, matched)] for the standing texts: they say what is,
-    with no task numbers, dates or the owner's words as history."""
+    with no task numbers, dates or the owner's words as history (HTML comments
+    included), and name another repository's issue so that GitHub links it."""
     section = rules["standing"]
+    unlinked = rules["unlinked_reference"]
     problems = []
     for pattern in section["files"]:
         for path in sorted(glob.glob(os.path.join(root, pattern), recursive=True)):
@@ -254,9 +273,11 @@ def check_standing(rules, root=ROOT):
                     continue
                 if fenced:
                     continue
-                for rule_id, matched in find_all(section["patterns"], line):
-                    where = "%s:%d" % (os.path.relpath(path, root), number)
+                where = "%s:%d" % (os.path.relpath(path, root), number)
+                for rule_id, matched in find_all(section["patterns"], line, read_comments=True):
                     problems.append((where, section["check"], rule_id, matched))
+                for rule_id, matched in find_unlinked(unlinked["patterns"], line):
+                    problems.append((where, unlinked["check"], rule_id, matched))
     return problems
 
 
@@ -283,13 +304,14 @@ def api(path, token):
 def read_pull_request(repo, number, token, commits=True):
     base = "/repos/%s" % repo
     pr = api("%s/pulls/%d" % (base, number), token)
-    texts = [{"url": pr["html_url"], "body": pr["title"]}, {"url": pr["html_url"], "body": pr.get("body")}]
+    texts = [{"url": pr["html_url"], "body": pr["title"], "kind": "title"},
+             {"url": pr["html_url"], "body": pr.get("body"), "kind": "body"}]
     if commits and pr["state"] == "open":
         for item in api("%s/pulls/%d/commits?per_page=100" % (base, number), token):
-            texts.append({"url": item["html_url"], "body": item["commit"]["message"]})
-    for kind in ("issues/%d/comments", "pulls/%d/reviews", "pulls/%d/comments"):
-        for item in api("%s/%s?per_page=100" % (base, kind % number), token):
-            texts.append({"url": item["html_url"], "body": item.get("body")})
+            texts.append({"url": item["html_url"], "body": item["commit"]["message"], "kind": "commit"})
+    for path, kind in (("issues/%d/comments", "comment"), ("pulls/%d/reviews", "review"), ("pulls/%d/comments", "review-comment")):
+        for item in api("%s/%s?per_page=100" % (base, path % number), token):
+            texts.append({"url": item["html_url"], "body": item.get("body"), "kind": kind})
     files = [f["filename"] for f in api("%s/pulls/%d/files?per_page=100" % (base, number), token)]
     return {"changed_files": files, "texts": texts}
 
@@ -302,7 +324,7 @@ def read_push(repo, before, after, token):
     not this push's to fail."""
     base = "/repos/%s" % repo
     compare = api("%s/compare/%s...%s" % (base, before, after), token)
-    texts = [{"url": c["html_url"], "body": c["commit"]["message"]} for c in compare["commits"]]
+    texts = [{"url": c["html_url"], "body": c["commit"]["message"], "kind": "commit"} for c in compare["commits"]]
     files = [f["filename"] for f in compare.get("files", [])]
     shas = {c["sha"] for c in compare["commits"]}
     numbers = []

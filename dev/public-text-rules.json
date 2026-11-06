@@ -104,9 +104,19 @@
         "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:passed|passing)\\b|\\b(?:passed|passing)\\s+\\d+\\b|\\b\\d+\\s*/\\s*\\d+\\s+(?:tests?\\s+)?(?:passed|pass|green)\\b"
       },
       {
+        "id": "test-tally",
+        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)"
+      },
+      {
         "id": "test-count",
         "regex": "\\b\\d+\\)?\\s+(?:(?:unit|node|python|bridge|model)\\s+)?tests?\\b(?!/)|\\b(?:ran|run|runs|running)\\s+\\d+\\s+(?:unit\\s+)?tests?\\b|\\bOK \\(\\d+ tests?\\)",
         "unless_before": "\\b(?:adds?|added|adding|introduc(?:es?|ed|ing)|includes?|including|writes?|wrote)\\s+(?:\\w+\\s+){0,3}$"
+      },
+      {
+        "id": "own-machine",
+        "regex": "\\bthis\\s+(?:machine|host)\\b|\\bthe\\s+host\\b(?!-|'s\\s+(?:name|key|address)|\\s+(?:names?|keys?|apps?|applications?|address(?:es)?|part|side|language|page|shell|program)\\b)",
+        "unless_sentence": "\\b(?:mdns|avahi|dns|ssh|sshfs|urls?|uri|domains?|hostnames?|tailscale|mesh|peers?|lan|ip|dhcp|http|https)\\b",
+        "quoted": true
       }
     ],
     "quoted_when_changed": [
@@ -155,6 +165,23 @@
       {
         "id": "still-to",
         "regex": "\\bstill\\s+to\\b"
+      },
+      {
+        "id": "does-not-block",
+        "regex": "\\b(?:does\\s+not|doesn't|do\\s+not|don't|need\\s+not|would\\s+not|wouldn't|should\\s+not|shouldn't)\\s+block(?:\\s*(?:[,:)—]|-\\s)|\\s+(?:the\\s+|this\\s+)?(?:merge|merging|pr|pull\\s+request|review|release|approval|it|this)\\b)"
+      },
+      {
+        "id": "non-blocking",
+        "regex": "\\b(?:non-?\\s?|not\\s+)blocking(?:\\s*(?:[.,;:)!?—]|-\\s|$)|\\s+(?:notes?|nits?|findings?|suggestions?|observations?|comments?|issues?|remarks?|items?|points?|concerns?|for\\s+(?:the\\s+|this\\s+)?(?:merge|pr|pull\\s+request|review|release))\\b)"
+      },
+      {
+        "id": "separate-change",
+        "regex": "\\b(?:a|another|its\\s+own)\\s+separate\\s+(?:change|pr|pull\\s+request|commit|issue|task|fix|branch)\\b|\\bin\\s+a\\s+separate\\s+(?:change|pr|pull\\s+request|commit|fix|branch)\\b"
+      },
+      {
+        "id": "left-for",
+        "regex": "\\bleft\\s+for\\s+(?!(?:the\\s+)?(?:user|person|people)\\b)(?:the\\s+|a\\s+|an\\s+)?[\\w@-]+",
+        "unless_line": "\\b(?:room|space|width|height|pixels?|px|time|seconds?|nothing|little|much|what(?:\\s+is)?)\\s+left\\s+for\\b"
       }
     ],
     "reference": "(?:[\\w.-]+/[\\w.-]+)?#\\d+|https?://github\\.com/[\\w.-]+/[\\w.-]+/(?:issues|pull)/\\d+"
@@ -165,6 +192,11 @@
       {
         "id": "repo-without-owner",
         "regex": "(?<![\\w./-])[A-Za-z0-9][\\w.-]+#\\d+\\b"
+      },
+      {
+        "id": "repo-without-owner",
+        "regex": "`[\\w.-]+/[\\w.-]+`\\s*:?\\s*#\\d+\\b|(?<![\\w./`-])[\\w.-]+/[\\w.-]+:\\s*#\\d+\\b",
+        "reads_code": true
       },
       {
         "id": "named-upstream-bare-number",
