@@ -110,6 +110,26 @@ reads every comment and review posted until then. A pull request whose text
 fails leaves the queue unmerged. There is no need to wait for the run a review
 started before you add the pull request to the queue.
 
+A pull request goes into the queue only on a review that counts: by someone
+other than its author, submitted before the merge, on the head that merges
+(after its last commit). A push after the review voids it; the author's own
+reviews never count. Every pull request and review here is posted under one
+GitHub login, so the login does not tell them apart: the first line of the
+pull request's body and of each review names who wrote it
+(`<!-- session:<name> -->`), and a review counts when its name differs from
+the pull request's. A review without that line does not count. Check before
+adding it to the queue:
+
+```sh
+gh api repos/sceny/omarchy-paperclipai/pulls/<n>/reviews --jq '.[]|[.submitted_at,.commit_id,(.body|split("\n")[0])]'
+gh pr view <n> --json body,headRefOid --jq '[(.body|split("\n")[0]),.headRefOid]'
+```
+
+A drill pull request (a test of the queue or the merge) carries no real
+change: it changes a scratch file and reverts it in the same drill. A drill
+that cannot run without a real change gets that review on the drill head
+before the merge is asked for.
+
 ## Releasing
 
 Releasing a version to Omarchy is always the owner's call. The steps below run
