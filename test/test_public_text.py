@@ -4,6 +4,7 @@ match a product word fails the build.
 
 The examples are written for the test: no real pull request, person or device."""
 
+import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -71,6 +72,10 @@ class Environment(unittest.TestCase):
             "Paperclip tokens are kept in the plugin's own file.",
             "A picture is decoded in a sandbox, never by the shell.",
             "Thumbnails are decoded in a sandbox with no network.",
+            "Pictures are decoded only in a sandbox, never by the shell.",
+            "Decoding happens in the sandbox.",
+            "Decoding runs in a sandbox with no network.",
+            "Each image is decoded within its own sandbox.",
             "The skills are in `~/.config/omarchy/paperclipai/skills` and stills live in $XDG_RUNTIME_DIR/sceny.paperclipai/.",
             "The QML container item keeps the row's width.",
             "The container keeps its width.",
@@ -119,6 +124,12 @@ class Environment(unittest.TestCase):
             ("container", "Ran the checks in a container; the QML item is fine."),
             ("container", "The row is fine - ran it in a container."),
             ("container", "Started a container and opened the panel."),
+            ("sandbox", "The thumbnails are decoded, the picture looks right and the panel was checked in the sandbox."),
+            ("container", "The layout of the panel was fine and we checked all of it in a container."),
+            ("sandbox", "Ran the suite in the sandbox, which decodes the picture."),
+            ("sandbox", "Verified: decoded images look right in the sandbox."),
+            ("sandbox", "Checked in the sandbox that images decode."),
+            ("sandbox", "Thumbnails are decoded, and the panel was checked in the sandbox."),
         ]:
             with self.subTest(text=text):
                 self.assertIn((ENV, rule), problems(text))
@@ -127,6 +138,9 @@ class Environment(unittest.TestCase):
             "A file with no recorded type is sent around the sandbox.",
             "A picture is not opened with no sandbox.",
             "The QML item is placed in a container row.",
+            "Thumbnails are decoded in the sandbox before the shell loads them.",
+            "Every layout runs inside a container item.",
+            "Pictures are decoded in the sandbox, and the panel loads them.",
         ]:
             with self.subTest(text=text):
                 self.assertEqual(problems(text), [])
@@ -136,6 +150,8 @@ class Environment(unittest.TestCase):
             "The container keeps its width.",
             "A container for the pinned row grows with its content.",
             "Containers hold the shortcuts.",
+            "Creates a container for the cards.",
+            "Creates a container for the tiles and the grid.",
         ]:
             with self.subTest(text=text):
                 self.assertEqual(problems(text), [])
@@ -143,15 +159,27 @@ class Environment(unittest.TestCase):
             "Ran it inside a rootless container.",
             "A fresh container per run.",
             "The container image is rebuilt.",
+            "Creates a container from the image.",
         ]:
             with self.subTest(text=text):
                 self.assertIn((ENV, "container"), problems(text))
 
     def test_a_count_of_tests_a_change_adds_is_not_a_run(self):
-        for text in ["Adds 3 tests.", "Added 12 new tests for the key.", "Includes 2 tests for the order."]:
+        for text in [
+            "Adds 3 tests.",
+            "Added 12 new tests for the key.",
+            "Includes 2 tests for the order.",
+            "Adds 3 tests and writes 2 tests.",
+        ]:
             with self.subTest(text=text):
                 self.assertEqual(problems(text), [])
-        for text in ["Adds a case. The suite ran 380 tests.", "Adds 3 tests; 380 tests pass.", "Adds 3 tests, 92 passed."]:
+        for text in [
+            "Adds a case. The suite ran 380 tests.",
+            "Adds 3 tests; 380 tests pass.",
+            "Adds 3 tests, 92 passed.",
+            "We add 3 tests and 92 tests pass.",
+            "Adds 3 tests and 92 tests pass.",
+        ]:
             with self.subTest(text=text):
                 self.assertTrue(checks(text), text)
 
@@ -187,6 +215,8 @@ class Environment(unittest.TestCase):
             "A fail-safe stops it at 1 fail-over.",
             "The second pass reads the cache.",
             "It fails when the key is missing.",
+            "The panel stops after 3 failed pairings.",
+            "After 2 failures in a row the bridge waits.",
             "Version 2 failed to load the panel.",
             "Android 13 failed to duplicate the audio.",
             "Step 3 failed without the key.",
@@ -209,6 +239,8 @@ class Environment(unittest.TestCase):
             "The device's address and the host in its URL are kept.",
             "The host-side check reads the key.",
             "This computer keeps the clipboard.",
+            "Keys are read from Hyprland on this machine, never assumed.",
+            "The firewall rule opens the port on this machine only.",
         ]:
             with self.subTest(text=text):
                 self.assertEqual(problems(text), [])
@@ -219,7 +251,7 @@ class Environment(unittest.TestCase):
         for files in (["dev/rig"], ["dev/sandbox"], ["docs/internals/development.md"], ["test/test_sandbox.py"]):
             with self.subTest(files=files):
                 self.assertEqual(problems(text, files), [])
-        self.assertIn((ENV, "own-machine"), problems(text, ["README.md"]))
+        self.assertIn((ENV, "own-machine"), problems(text, ["Model.js"]))
 
 
 class OpenItems(unittest.TestCase):
@@ -237,6 +269,8 @@ class OpenItems(unittest.TestCase):
             "Handled in a later release.",
             "TODO: the second page.",
             "Out of scope here.",
+            "- Fine.\n- The fold is not covered.\n- Fine too.",
+            "Verdict: pass.\n\nNot blocking, for later: the ellipsis re-flows.",
             "Tracked separately, in the next release.",
             "The fold is tracked on its own issue.",
             "Still to write the fold test.",
@@ -245,12 +279,12 @@ class OpenItems(unittest.TestCase):
             "Non-blocking: the label moves by a pixel.",
             "One non-blocking note on the fold.",
             "(not blocking) The label moves.",
+            "Nit, non-blocking: the label moves.",
+            "- **Non-blocking:** the label moves.",
             "The label moves in a separate change.",
             "A separate pull request takes the fold.",
             "Left for the panel engineer.",
             "The fold is left for a later release.",
-            "- Fine.\n- The fold is not covered.\n- Fine too.",
-            "Verdict: pass.\n\nNot blocking, for later: the ellipsis re-flows.",
         ]:
             with self.subTest(text=text):
                 self.assertIn(OPEN, checks(text))
@@ -283,6 +317,11 @@ class OpenItems(unittest.TestCase):
             "The room left for the title shrinks as the chip grows.",
             "The step left for the user shows under the switch.",
             "Each device keeps a separate cache.",
+            "The write does not block, so the bar keeps drawing.",
+            "A reader that never reads does not block it.",
+            "The clipboard read is now non-blocking.",
+            "wl-paste runs non-blocking: the shell never waits.",
+            "The rename is in a separate commit, so the diff reads.",
         ]:
             with self.subTest(text=text):
                 self.assertNotIn(OPEN, checks(text))
@@ -300,31 +339,34 @@ class OpenItems(unittest.TestCase):
     def test_a_stated_gap_passes_and_a_bare_not_checked_does_not(self):
         self.assertNotIn(OPEN, checks("- Not verified: iOS (needs macOS)."))
         self.assertNotIn(OPEN, checks("Not verified: iOS, no Mac here."))
+        self.assertNotIn(OPEN, checks("1. Not verified: iOS."))
+        self.assertNotIn(OPEN, checks("2) Not verified: iOS."))
+        self.assertNotIn(OPEN, checks("**Not verified:** iOS."))
+        self.assertNotIn(OPEN, checks("> Not verified: iOS."))
+        self.assertNotIn(OPEN, checks("- [ ] Not verified: iOS."))
+        self.assertNotIn(OPEN, checks("- **Not verified:** iOS, no Mac here."))
         self.assertIn(OPEN, checks("- Not checked on iOS."))
+        self.assertIn(OPEN, checks("**Not verified:** iOS. Not checked on Android."))
+        self.assertIn(OPEN, checks("- [ ] Not verified: iOS. Not tested on Android."))
+        self.assertIn(OPEN, checks("Not verified: iOS. Not checked on Android."))
+        self.assertIn(OPEN, checks("NOT VERIFIED: iOS, but not checked on Android."))
+        self.assertIn(OPEN, checks("Not checked in a running shell, and not tested."))
 
-    def test_a_numbered_stated_gap_passes(self):
-        self.assertNotIn(OPEN, checks("1. Not verified: iOS (needs macOS)."))
-        self.assertNotIn(OPEN, checks("1) Not verified: iOS, no Mac here."))
-        self.assertIn(OPEN, checks("1. Not checked on iOS."))
-        self.assertIn(OPEN, checks("1) Not checked on iOS."))
-
-    def test_a_quoted_stated_gap_passes(self):
-        self.assertNotIn(OPEN, checks("> Not verified: iOS (needs macOS)."))
-        self.assertNotIn(OPEN, checks("> - Not verified: iOS (needs macOS)."))
-        self.assertIn(OPEN, checks("> Not checked on iOS."))
-
-    def test_a_second_open_item_on_a_stated_gap_line_fails(self):
+    def test_a_quoted_or_nested_stated_gap_passes(self):
         for text in [
-            "Not verified: iOS. Not checked on Android.",
-            "- Not verified: iOS. Not checked on Android.",
-            "1. Not verified: iOS. Not checked on Android.",
-            "> Not verified: iOS. Not checked on Android.",
-            "NOT VERIFIED: iOS, but not checked on Android.",
+            "> Not verified: iOS.",
+            "> - Not verified: iOS.",
+            "> > Not verified: iOS.",
+            "- > Not verified: iOS.",
+            "- - Not verified: iOS.",
+            "1. - Not verified: iOS.",
+            "> 1. - Not verified: iOS.",
         ]:
             with self.subTest(text=text):
-                self.assertIn(OPEN, checks(text))
-        self.assertNotIn(OPEN, checks("Not verified: iOS."))
-        self.assertIn(OPEN, checks("The next read is 10 s later. Done later."))
+                self.assertNotIn(OPEN, checks(text))
+        self.assertIn(OPEN, checks("> Not checked on iOS."))
+        self.assertIn(OPEN, checks("> - Not checked on iOS."))
+        self.assertIn(OPEN, checks("- > - Not checked on iOS."))
 
     def test_words_that_are_not_a_leftover_pass(self):
         for text in [
@@ -455,11 +497,11 @@ class WholePullRequest(unittest.TestCase):
 class Sources(unittest.TestCase):
     """Where the texts come from: a pull request's title and commits, a comment on it, and a push to develop."""
     REPO = "sceny/omarchy-paperclipai"
-    URL = "https://github.com/sceny/omarchy-paperclipai/pull/62"
-    TITLE = "Regression: a planted failure is caught by a row of its own (SCE-741)"
-    SQUASH = "All 94 tests pass. The planted failure is caught by its own row."
-    COMMIT_URL = "https://github.com/sceny/omarchy-paperclipai/commit/ec22112"
-    PR = {"html_url": URL, "title": TITLE, "body": "Clean body.", "number": 62, "state": "open", "updated_at": "2026-10-17T00:19:37Z"}
+    URL = "https://github.com/sceny/omarchy-paperclipai/pull/258"
+    TITLE = "Sandbox: one image per repository on a common base; omarchy-paperclipai and dev/soak run in it (SCE-741)"
+    SQUASH = "All 94 tests pass. HUP signal now fires immediately when caught in any backgrounded pipeline."
+    COMMIT_URL = "https://github.com/sceny/omarchy-paperclipai/commit/da23a05"
+    PR = {"html_url": URL, "title": TITLE, "body": "Clean body.", "number": 258, "state": "open", "updated_at": "2026-10-17T00:19:37Z"}
 
     def fake_api(self, responses):
         def api(path, token):
@@ -469,32 +511,28 @@ class Sources(unittest.TestCase):
 
     def read(self, responses, commits=True):
         with mock.patch.object(ptc, "api", self.fake_api(responses)):
-            return ptc.read_pull_request(self.REPO, 62, "token", commits=commits)
-
-    def push(self, responses):
-        with mock.patch.object(ptc, "api", self.fake_api(responses)):
-            return ptc.read_push(self.REPO, "aaa", "bbb", "token")
+            return ptc.read_pull_request(self.REPO, 258, "token", commits=commits)
 
     def test_each_text_carries_its_kind(self):
         review = {"html_url": self.URL + "#pullrequestreview-1", "body": "Pass."}
         doc = self.read({
-            "/repos/%s/pulls/62" % self.REPO: self.PR,
-            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}],
-            "/repos/%s/issues/62/comments" % self.REPO: [{"html_url": self.URL + "#issuecomment-1", "body": "Ok."}],
-            "/repos/%s/pulls/62/reviews" % self.REPO: [review],
-            "/repos/%s/pulls/62/comments" % self.REPO: [{"html_url": self.URL + "#discussion_r1", "body": "Nit."}],
+            "/repos/%s/pulls/258" % self.REPO: self.PR,
+            "/repos/%s/pulls/258/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}],
+            "/repos/%s/issues/258/comments" % self.REPO: [{"html_url": self.URL + "#issuecomment-1", "body": "Ok."}],
+            "/repos/%s/pulls/258/reviews" % self.REPO: [review],
+            "/repos/%s/pulls/258/comments" % self.REPO: [{"html_url": self.URL + "#discussion_r1", "body": "Nit."}],
         })
         self.assertEqual([t["kind"] for t in doc["texts"]], ["title", "body", "commit", "comment", "review", "review-comment"])
 
     def test_the_title_is_read_and_its_task_id_fails(self):
-        doc = self.read({"/repos/%s/pulls/62" % self.REPO: self.PR})
+        doc = self.read({"/repos/%s/pulls/258" % self.REPO: self.PR})
         self.assertIn({"url": self.URL, "body": self.TITLE, "kind": "title"}, doc["texts"])
         self.assertIn((ENV, "task-id"), checks_of(doc))
 
     def test_the_commit_messages_of_a_pull_request_are_read(self):
         responses = {
-            "/repos/%s/pulls/62" % self.REPO: self.PR,
-            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
+            "/repos/%s/pulls/258" % self.REPO: self.PR,
+            "/repos/%s/pulls/258/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
         }
         doc = self.read(responses)
         self.assertIn({"url": self.COMMIT_URL, "body": self.SQUASH, "kind": "commit"}, doc["texts"])
@@ -502,8 +540,8 @@ class Sources(unittest.TestCase):
 
     def test_a_comment_on_a_closed_pull_request_does_not_reread_its_commits(self):
         responses = {
-            "/repos/%s/pulls/62" % self.REPO: dict(self.PR, state="closed"),
-            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
+            "/repos/%s/pulls/258" % self.REPO: dict(self.PR, state="closed"),
+            "/repos/%s/pulls/258/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
         }
         doc = self.read(responses)
         self.assertIn({"url": self.URL, "body": self.TITLE, "kind": "title"}, doc["texts"])
@@ -521,14 +559,14 @@ class Sources(unittest.TestCase):
         self.assertEqual(docs, [])
 
     def test_a_push_to_develop_reads_the_comments_on_the_pull_request_it_merged(self):
-        merged = dict(self.PR, number=62, state="closed", merged_at="2026-10-23T09:00:00Z", merge_commit_sha="sss",
-                      html_url="https://github.com/sceny/omarchy-paperclipai/pull/62")
-        comment = {"html_url": "https://github.com/sceny/omarchy-paperclipai/pull/62#issuecomment-1", "body": "Not checked on the phone."}
+        merged = dict(self.PR, number=356, state="closed", merged_at="2026-10-23T09:00:00Z", merge_commit_sha="sss",
+                      html_url="https://github.com/sceny/omarchy-paperclipai/pull/356")
+        comment = {"html_url": "https://github.com/sceny/omarchy-paperclipai/pull/356#issuecomment-1", "body": "Not checked on the phone."}
         responses = {
             "/repos/%s/compare/aaa...bbb" % self.REPO: {"commits": [{"sha": "sss", "html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}]},
             "/repos/%s/commits/sss/pulls" % self.REPO: [merged],
-            "/repos/%s/pulls/62" % self.REPO: merged,
-            "/repos/%s/issues/62/comments" % self.REPO: [comment],
+            "/repos/%s/pulls/356" % self.REPO: merged,
+            "/repos/%s/issues/356/comments" % self.REPO: [comment],
         }
         _, _, docs = self.push(responses)
         self.assertEqual([doc["texts"][0]["url"] for doc in docs], [merged["html_url"]])
@@ -553,6 +591,10 @@ class Sources(unittest.TestCase):
         }
         _, _, docs = self.push(responses)
         self.assertEqual(docs, [])
+
+    def push(self, responses):
+        with mock.patch.object(ptc, "api", self.fake_api(responses)):
+            return ptc.read_push(self.REPO, "aaa", "bbb", "token")
 
     def test_a_comment_on_a_pull_request_names_its_number(self):
         self.assertEqual(ptc.pull_request_number({"issue": {"number": 301, "pull_request": {"url": "x"}}}), 301)
@@ -594,13 +636,108 @@ class Standing(unittest.TestCase):
                              [("AGENTS.md:2", "repo-without-owner"), ("AGENTS.md:3", "task-id")])
 
 
+class PublicFiles(unittest.TestCase):
+    def check_release_notes(self, text):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "CHANGELOG.md"), "w") as handle:
+                handle.write(text)
+            return [(where, rule) for where, _, rule, _ in ptc.check_public_files(RULES, root)]
+
+    def test_a_release_note_line_with_a_task_id_fails(self):
+        self.assertEqual(self.check_release_notes("## 1.0.0\n\n- Fixed the fold (#12).\n- Copied from a title (SCE-123).\n"),
+                         [("CHANGELOG.md:4", "task-id")])
+
+    def test_a_release_note_names_no_private_path_count_or_paperclip(self):
+        found = self.check_release_notes("- Logs in /home/someone/x.\n- Stored under ~/.config/thing.\n"
+                                         "- Output in /tmp/run/out.\n- The suite ran 380 tests.\n- Tracked on the paperclip board.\n")
+        self.assertEqual(found, [("CHANGELOG.md:1", "home-path"), ("CHANGELOG.md:2", "dot-path"),
+                                 ("CHANGELOG.md:3", "tmp-path"), ("CHANGELOG.md:4", "test-count"),
+                                 ("CHANGELOG.md:5", "paperclip")])
+
+    def test_a_released_entry_may_name_the_rig_and_the_emulator(self):
+        self.assertEqual(self.check_release_notes("- A hidden test rig (`dev/rig`) with a small Android emulator.\n"), [])
+
+    def test_the_release_notes_pass(self):
+        self.assertEqual(ptc.check_public_files(RULES), [])
+
+    def test_every_pattern_it_names_exists(self):
+        self.assertTrue(set(RULES["public_files"]["pattern_ids"]) <= {p["id"] for p in RULES["environment"]["patterns"]})
+
+
+class Twin(unittest.TestCase):
+    """The twin repository holds the same checker and the same rules, apart from
+    each one's own lines (LOCAL_RULES)."""
+
+    def setUp(self):
+        with open(SCRIPT) as handle:
+            self.checker = handle.read()
+        with open(ptc.RULES_FILE) as handle:
+            self.rules_text = handle.read()
+
+    def twin_rules(self, change=None):
+        rules = json.loads(self.rules_text)
+        rules["repository"], rules["twin"] = rules["twin"], rules["repository"]
+        for pat in rules["environment"]["patterns"]:
+            if pat["id"] == "paperclip":
+                pat["regex"] = "\\bother\\b"
+            if "unless_match" in pat:
+                pat["unless_match"] = "other\\.plugin"
+            if "allowed_when_changed" in pat:
+                pat["allowed_when_changed"] = [re.sub(r"^tests/", "test/", f) for f in pat["allowed_when_changed"]]
+        if change:
+            change(rules)
+        return json.dumps(rules, indent=1)
+
+    def test_each_repository_s_own_lines_are_no_drift(self):
+        self.assertEqual(ptc.drift(self.checker, self.rules_text, self.checker, self.twin_rules()), [])
+
+    def test_a_changed_rule_or_checker_is_drift(self):
+        def narrower(rules):
+            rules["open_item"]["markers"][0]["regex"] += "x"
+        self.assertEqual(ptc.drift(self.checker, self.rules_text, self.checker, self.twin_rules(narrower)),
+                         ["dev/public-text-rules.json"])
+        self.assertEqual(ptc.drift(self.checker, self.rules_text, self.checker + "\n", self.rules_text),
+                         ["dev/public-text-check"])
+
+    def fake_api(self, heads):
+        """heads: ref -> (checker, rules) of the twin; every ref but develop is an open pull request."""
+        twin = RULES["twin"]
+
+        def api(path, token):
+            if path.startswith("/repos/%s/pulls?" % twin):
+                return [{"html_url": "https://github.com/%s/pull/%d" % (twin, i), "head": {"sha": ref}}
+                        for i, ref in enumerate(r for r in heads if r != "develop")]
+            name, ref = re.match(r"/repos/[^/]+/[^/]+/contents/(.+)\?ref=(.+)$", path).groups()
+            text = heads[ref][ptc.TWIN_FILES.index(name)]
+            return {"content": base64.b64encode(text.encode()).decode()}
+        return api
+
+    def check(self, heads):
+        with mock.patch.object(ptc, "api", self.fake_api(heads)):
+            return ptc.check_twin(RULES, "token", SCRIPT)
+
+    def test_it_matches_the_twin_s_develop(self):
+        where, differ = self.check({"develop": (self.checker, self.twin_rules())})
+        self.assertEqual((where, differ), ("%s develop" % RULES["twin"], []))
+
+    def test_a_change_made_in_both_lands_one_pull_request_at_a_time(self):
+        where, differ = self.check({"develop": (self.checker + "# old\n", self.twin_rules()),
+                                    "aaa": (self.checker + "# other\n", self.twin_rules()),
+                                    "bbb": (self.checker, self.twin_rules())})
+        self.assertEqual((where, differ), ("https://github.com/%s/pull/1" % RULES["twin"], []))
+
+    def test_a_change_in_one_repository_alone_fails(self):
+        where, differ = self.check({"develop": (self.checker + "# old\n", self.twin_rules())})
+        self.assertEqual((where, differ), (None, ["dev/public-text-check"]))
+
+
 class Rules(unittest.TestCase):
     def test_every_pattern_compiles_and_has_an_id(self):
         patterns = (RULES["environment"]["patterns"] + RULES["open_item"]["markers"] +
                     RULES["unlinked_reference"]["patterns"] + RULES["standing"]["patterns"])
         for pat in patterns:
             re.compile(pat["regex"])
-            for key in ("unless_sentence", "unless_before", "unless_match"):
+            for key in ("unless_near", "unless_before", "unless_match"):
                 if key in pat:
                     re.compile(pat[key])
         re.compile(RULES["open_item"]["reference"])

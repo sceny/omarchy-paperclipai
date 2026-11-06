@@ -18,3 +18,7 @@ jobs:
           node-version: 22
       - name: Every check that needs no desktop
         run: test/run_all.sh
+      - name: The public-text checker and its rules match the twin repository's
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 dev/public-text-check --twin

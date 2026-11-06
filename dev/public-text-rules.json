@@ -1,4 +1,6 @@
 {
+  "repository": "sceny/omarchy-paperclipai",
+  "twin": "sceny/omarchy-devices",
   "environment": {
     "check": "public-text-environment",
     "patterns": [
@@ -23,7 +25,7 @@
           "test/test_sandbox.py"
         ],
         "quoted": true,
-        "unless_sentence": "decod|bubblewrap|glycin|pixbuf|ffmpeg|\\b(?:no|without|around|outside|bypass\\w*)\\s+(?:the\\s+|a\\s+)?sandbox"
+        "unless_near": "decod\\w*\\s+(?:only\\s+|(?:happens|runs)\\s+)?(?:in|with|by|inside|within|via|through)\\s+(?:the\\s+|an?\\s+|its\\s+(?:own\\s+)?|own\\s+)?sandbox(?:es)?\\b|bubblewrap|glycin|pixbuf|ffmpeg|\\b(?:no|without|around|outside|bypass\\w*)\\s+(?:the\\s+|a\\s+)?sandbox"
       },
       {
         "id": "rig",
@@ -68,7 +70,7 @@
           "test/test_sandbox.py"
         ],
         "quoted": true,
-        "unless_sentence": "\\bqml\\b|\\bitem\\b|layout|\\brow\\b|\\bcolumn\\b|flickable|rectangle|scroll|\\.qml"
+        "unless_near": "\\bqml\\b|\\bitem\\b|layout|\\brow\\b|\\bcolumn\\b|flickable|rectangle|scroll|\\.qml|\\bcards?\\b|\\btiles?\\b|\\bgrid\\b|\\bcells?\\b|\\bwidgets?\\b|\\bpills?\\b|\\bsections?\\b"
       },
       {
         "id": "paperclip",
@@ -105,18 +107,18 @@
       },
       {
         "id": "test-tally",
-        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)",
+        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)(?!\\s+in\\s+a\\s+row\\b)(?!\\s+(?!(?:and|or|on|in|of|out|with|at|after|before|since|so|but|here|now|locally|then|again|tests?)\\b)[a-z])",
         "unless_before": "\\b(?:version|release|step|stage|phase|part|round|attempt|try|android|api|level|sdk|omarchy|qt|python|node|hyprland)\\s*$"
       },
       {
         "id": "test-count",
         "regex": "\\b\\d+\\)?\\s+(?:(?:unit|node|python|bridge|model)\\s+)?tests?\\b(?!/)|\\b(?:ran|run|runs|running)\\s+\\d+\\s+(?:unit\\s+)?tests?\\b|\\bOK \\(\\d+ tests?\\)",
-        "unless_before": "\\b(?:adds?|added|adding|introduc(?:es?|ed|ing)|includes?|including|writes?|wrote)\\s+(?:\\w+\\s+){0,3}$"
+        "unless_before": "\\b(?:adds?|added|adding|introduc(?:es?|ed|ing)|includes?|including|writes?|wrote)\\s+(?:(?!(?:and|or|but|nor|then|plus|so|while|ran|run|runs|running|pass|passes|passed|passing)\\b)\\w+\\s+){0,3}$"
       },
       {
         "id": "own-machine",
-        "regex": "\\bthis\\s+(?:machine|host)\\b|\\bthe\\s+host\\b(?!-|'s\\s+(?:name|key|address)|\\s+(?:names?|keys?|apps?|applications?|address(?:es)?|part|side|language|page|shell|program)\\b)",
-        "unless_sentence": "\\b(?:mdns|avahi|dns|ssh|sshfs|urls?|uri|domains?|hostnames?|tailscale|mesh|peers?|lan|ip|dhcp|http|https)\\b",
+        "regex": "\\b(?:check(?:ed|s)?|test(?:ed|s)?|ran|runs?|running|works?|worked|verified|reproduc\\w*|tried|built|pass(?:es|ed)?|fail(?:s|ed)?)\\b[^.;:!?\\n]{0,60}?\\bthis\\s+(?:machine|host)\\b|\\bthis\\s+(?:machine|host)\\b[^.;:!?\\n]{0,30}?\\b(?:pass(?:es|ed)?|fail(?:s|ed)?|works?|worked|green|red)\\b|\\bthe\\s+host\\b(?!-|'s\\s+(?:name|key|address)|\\s+(?:names?|keys?|apps?|applications?|address(?:es)?|part|side|language|page|shell|program)\\b)",
+        "unless_near": "\\b(?:mdns|avahi|dns|ssh|sshfs|urls?|uri|domains?|hostnames?|tailscale|mesh|peers?|lan|ip|dhcp|http|https)\\b",
         "allowed_when_changed": [
           "dev/sandbox*",
           "dev/rig*",
@@ -138,7 +140,7 @@
       {
         "id": "not-checked",
         "regex": "\\bnot\\s+(?:yet\\s+|been\\s+)?(?:checked|tested|covered|verified|driven)\\b",
-        "unless_span": "^\\s*(?:(?:[-*+]|\\d+[.)]|>)\\s+)*Not\\s+verified:|not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
+        "unless_span": "^\\s*(?:>\\s*|(?:[-*+]|\\d+[.)])\\s+(?:\\[[ xX]\\]\\s+)?)*(?:\\*\\*)?Not\\s+verified:|not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
       },
       {
         "id": "unchecked",
@@ -175,15 +177,15 @@
       },
       {
         "id": "does-not-block",
-        "regex": "\\b(?:does\\s+not|doesn't|do\\s+not|don't|need\\s+not|would\\s+not|wouldn't|should\\s+not|shouldn't)\\s+block(?:\\s*(?:[,:)—]|-\\s)|\\s+(?:the\\s+|this\\s+)?(?:merge|merging|pr|pull\\s+request|review|release|approval|it|this)\\b)"
+        "regex": "\\b(?:does\\s+not|doesn't|do\\s+not|don't|need\\s+not|would\\s+not|wouldn't|should\\s+not|shouldn't)\\s+block(?:\\s*(?:[:)—]|-\\s)|\\s+(?:the\\s+|this\\s+)?(?:merge|merging|pr|pull\\s+request|review|release|approval)\\b)"
       },
       {
         "id": "non-blocking",
-        "regex": "\\b(?:non-?\\s?|not\\s+)blocking(?:\\s*(?:[.,;:)!?—]|-\\s|$)|\\s+(?:notes?|nits?|findings?|suggestions?|observations?|comments?|issues?|remarks?|items?|points?|concerns?|for\\s+(?:the\\s+|this\\s+)?(?:merge|pr|pull\\s+request|review|release))\\b)"
+        "regex": "(?:^\\s*(?:>\\s*)?(?:(?:[-*+]|\\d+[.)])\\s+)?(?:\\*\\*|_)?|[(\\[]\\s*|\\b(?:nits?|notes?|minor|optional)\\s*[,:(—-]\\s*)(?:non-?\\s?|not\\s+)blocking\\b|\\b(?:non-?\\s?|not\\s+)blocking(?:\\s*\\)|\\s+(?:notes?|nits?|findings?|suggestions?|observations?|comments?|issues?|remarks?|items?|points?|concerns?|for\\s+(?:the\\s+|this\\s+)?(?:merge|pr|pull\\s+request|review|release))\\b)"
       },
       {
         "id": "separate-change",
-        "regex": "\\b(?:a|another|its\\s+own)\\s+separate\\s+(?:change|pr|pull\\s+request|commit|issue|task|fix|branch)\\b|\\bin\\s+a\\s+separate\\s+(?:change|pr|pull\\s+request|commit|fix|branch)\\b"
+        "regex": "\\b(?:a|another|its\\s+own)\\s+separate\\s+(?:change|pr|pull\\s+request|issue|task|fix|branch)\\b|\\bin\\s+a\\s+separate\\s+(?:change|pr|pull\\s+request|fix|branch)\\b"
       },
       {
         "id": "left-for",
@@ -233,5 +235,9 @@
         "regex": "\\bthe owner(?:'s)? (?:said|decided|asked|decision|ask)\\b(?! (?:go|or no)\\b)"
       }
     ]
+  },
+  "public_files": {
+    "files": ["CHANGELOG.md"],
+    "pattern_ids": ["task-id", "paperclip", "home-path", "dot-path", "tmp-path", "test-count-passed", "test-count", "test-tally"]
   }
 }
