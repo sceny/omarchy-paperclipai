@@ -210,8 +210,10 @@ at the call catches the next variant.
    text it is sending. Nothing in `bin/`, `lib/` or `skills/` runs a tool that
    prints processes or their command lines (`systemctl status`, `systemd-cgls`,
    `loginctl user-status` or `session-status`, `ps`, `pgrep -a`, `top`,
-   `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`) unless the line
-   is on the allowlist with a reason. The doctor reads the
+   `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`, with `-p` in any
+   flag), in a shell line, by its path (`/usr/bin/ps`), after a prefix (`sudo`,
+   `timeout 5`) or as an argv list (`subprocess.run(["ps", "aux"])`), unless the line is on the allowlist with
+   a reason. The doctor reads the
    service through `systemctl show` and a fixed list of properties, never
    `ExecStart` or `Environment`. A crash of the redacted probe names only the
    exception's type, and a number from the server is read as a number or as 0.

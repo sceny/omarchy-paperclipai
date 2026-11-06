@@ -12,6 +12,10 @@ and `session-status` (the session's process tree, the same way), `ps`,
 `pgrep -a`, `top` (any way it is run: `-c` only reverses what the user's
 `toprc` remembers), `/proc/<pid>/cmdline` and `environ`, and `ss -p` /
 `netstat -p`, which name a socket's process by a name any process can set.
+Each is caught as the call, however it is spelled: a shell line, by its path
+(`/usr/bin/ps`), after a prefix that runs it (`sudo top`, `timeout 5 top`), or
+as an argv list (`subprocess.run(["ps", "aux"])`); `-p` in any flag of `ss`
+or `netstat`.
 What the scripts in `bin/` and `lib/` print goes into the doctor bundle, and
 what `skills/` say to run goes into the session itself. A line that uses one
 is listed in ALLOWED with the reason its output reaches no AI session and holds
@@ -22,20 +26,33 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOLDERS = ("bin", "lib", "skills")
 
+# A list item in quotes: argv[0] of `subprocess.run([...])`, `execvp(...)`, or a
+# word after a prefix in the same list (`["sudo", "top"]`).
+ARGV = r"[\[(,]\s*[\"'](?:[^\s\"']*/)?%s[\"']\s*[,\])]"
+# What runs the next word as the command: `sudo top`, `timeout 5 top`,
+# `nice -n 10 top`, `env TERM=dumb top`.
+PREFIX = (r"\b(?:sudo|doas|exec|command|nohup|setsid|env|nice|ionice|timeout|stdbuf|runuser)"
+          r"(?:\s+-\S+(?:\s+[^\s\d=-][^\s=]*)?|\s+[^\s\d=-][^\s=]*=\S*|\s+\d\S*)*\s+")
+# Between a command and its next argument: a space, or the end of one quoted
+# list item and the start of the next.
+SEP = r"(?:\s+|[\"']\s*,\s*[\"'])"
+
 PROCESS_LISTS = [re.compile(p) for p in (
-    r"\bsystemctl\b.*\sstatus\b",
+    r"\bsystemctl\b.*[\s\"']status\b",
     r"\bsystemd-cgls\b",
-    r"\bloginctl\b.*\s(?:user|session)-status\b",
-    r"(?:^|[\s;|&(`$\"'])ps\s+[-a-z]",
-    r"\bpgrep\b.*\s-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
-    r"(?:^|[\s;|&(`$\"'])top(?:\s+-|\s*[;|&)`>])|(?:^\s*|[;|&(`$]\s*)top\s*$",
+    r"\bloginctl\b.*[\s\"'](?:user|session)-status\b",
+    r"(?:^|[\s;|&(`$\"'/])ps\s+[-a-z]|" + ARGV % "ps",
+    r"\bpgrep\b.*[\s\"']-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
+    r"(?:^|[\s;|&(`$\"'/])top(?:\s+-|\s*\d*[<>]|\s*[;|&)`])|(?:^\s*|[;|&(`$]\s*)(?:\S*/)?top\s*$|"
+    + PREFIX + r"(?:\S*/)?top\b(?![-.\w])|" + ARGV % "top",
     r"/proc/\S*/(?:cmdline|environ)\b",
-    r"\b(?:ss|netstat)\s+-[A-Za-z]*p",
+    r"\b(?:ss|netstat)(?:" + SEP + r"-[^\s\"',]*)*" + SEP + r"-(?:[A-Za-z]*p|-processes\b|-program\b)",
 )]
 
 # (file, the line, spaces collapsed) -> why what it prints reaches no AI session
@@ -114,6 +131,38 @@ class NoProcessListsForTheSession(unittest.TestCase):
             "ss -p": "ss -ltnp",
             "netstat -p": "netstat -ltnp",
             "a skill's command": "systemctl --user status paperclipai.service",
+            "systemctl status as argv": 'subprocess.run(["systemctl", "--user", "status", unit])',
+            "systemd-cgls as argv": "subprocess.run(['systemd-cgls', '--no-pager'])",
+            "loginctl user-status as argv": 'check_output(["loginctl", "user-status"])',
+            "loginctl session-status as argv": "run(['loginctl', 'session-status', sid])",
+            "ps as argv": 'subprocess.run(["ps", "aux"], capture_output=True)',
+            "ps alone as argv": 'check_output(["ps"])',
+            "pgrep -a as argv": 'subprocess.run(["pgrep", "-a", "node"])',
+            "top as argv": 'subprocess.run(["top", "-b", "-n", "1"])',
+            "top after a prefix as argv": 'subprocess.run(["timeout", "5", "top", "-b"])',
+            "ss -p as argv": 'subprocess.run(["ss", "-ltnp"])',
+            "netstat -p as argv": "run(['netstat', '-ltnp'])",
+            "sudo top": "sudo top",
+            "sudo -u top": "sudo -u someone top",
+            "timeout top": "timeout 5 top",
+            "nice top": "nice -n 10 top",
+            "env top": "env TERM=dumb top",
+            "env top, a value holding =": "env A=b=c top",
+            "env top, a name from a digit": "env 1=2 top",
+            "top redirected before its options": "top 2>/dev/null -b",
+            "top fed from /dev/null": "top </dev/null",
+            "prefixes in a row": "sudo -u x env A=b timeout 5 top",
+            "ss -p as a later flag": "ss -t -p",
+            "netstat -p as a later flag": "netstat -t -p",
+            "ss -p as a later argv flag": 'subprocess.run(["ss", "-t", "-p"])',
+            "ss --processes": "ss -t --processes",
+            "netstat --program": "netstat -t --program",
+            "ps by its path": "/usr/bin/ps aux",
+            "top by its path": "/usr/bin/top -b",
+            "top by its path alone": "/usr/bin/top",
+            "top by its path after a prefix": "sudo /usr/bin/top",
+            "ps by its path as argv": 'run(["/usr/bin/ps", "aux"])',
+            "top by its path as argv": "run(['/usr/bin/top', '-b'])",
         }
         for what, line in planted.items():
             with tempfile.TemporaryDirectory() as d:
@@ -132,12 +181,33 @@ class NoProcessListsForTheSession(unittest.TestCase):
                      "the top of the list", "stop -c", "top-level `url`",
                      "at the top.", "htop -c",
                      "paperclipai service status --json", "the steps it takes",
-                     "open('/proc/net/tcp')"):
+                     "open('/proc/net/tcp')",
+                     'subprocess.run(["systemctl", "--user", "show", unit, "--property=ActiveState"])',
+                     "subprocess.run(['pgrep', '-f', 'quickshell'])", 'run(["ss", "-ltn"])',
+                     'run(["loginctl", "show-user", user])', 'run(["htop"])', 'run(["pstree"])',
+                     '{"position": "top", "margin": 0}', "align: 'top',",
+                     "sudo is not needed at the top", "timeout is set at the top.",
+                     "env top-level keys", "the top 10 items", "the status of the top"):
             with tempfile.TemporaryDirectory() as d:
                 os.makedirs(os.path.join(d, "bin"))
                 with open(os.path.join(d, "bin", "tool"), "w") as f:
                     f.write(line + "\n")
                 self.assertEqual(process_lists(d, allowed={})[0], [], line)
+
+    def test_a_long_prefix_line_is_read_quickly(self):
+        # Each word after a prefix word (`-n 1`, `A=b=c`, `1=2`) must have one
+        # reading only, or a long `exec ...`/`env ...` line with no `top` in it
+        # backtracks for minutes.
+        for line in ("nice" + " -n 1" * 200 + " x", "env" + " A=1" * 200 + " x",
+                     "env" + " a=b=c" * 200 + " x", "env" + " 1=2" * 200 + " x",
+                     "exec" + " -a 1=2" * 200 + " x", "ss" + " -t" * 200 + " x"):
+            with tempfile.TemporaryDirectory() as d:
+                os.makedirs(os.path.join(d, "bin"))
+                with open(os.path.join(d, "bin", "tool"), "w") as f:
+                    f.write(line + "\n")
+                start = time.monotonic()
+                self.assertEqual(process_lists(d, allowed={})[0], [], line[:20])
+                self.assertLess(time.monotonic() - start, 0.5, line[:20])
 
     def test_comments_are_not_read(self):
         with tempfile.TemporaryDirectory() as d:
