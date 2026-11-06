@@ -53,6 +53,8 @@ class Environment(unittest.TestCase):
         "runtime-dir": "Stills in $XDG_RUNTIME_DIR/other/.",
         "test-count-passed": "92 passed, 0 failed.",
         "test-count": "The suite ran 380 tests.",
+        "test-tally": "76 pass, 0 fail.",
+        "own-machine": "It works on this machine.",
     }
 
     def test_every_class_fails(self):
@@ -103,6 +105,7 @@ class Environment(unittest.TestCase):
             ("runtime-dir", "Stills in $XDG_RUNTIME_DIR/other/."),
             ("test-count-passed", "92 passed, 0 failed."),
             ("test-count", "The suite ran 380 tests."),
+            ("test-tally", "76 pass, 0 fail."),
         ]:
             with self.subTest(rule=rule):
                 self.assertIn((ENV, rule), problems(text, files))
@@ -153,6 +156,72 @@ class Environment(unittest.TestCase):
                 self.assertTrue(checks(text), text)
 
 
+    def test_html_comments_are_read_and_fences_stay_blank(self):
+        for rule, text in [
+            ("task-id", "Clean body.\n<!-- SCE-123 -->"),
+            ("paperclip", "<!--\nfrom the paperclip board\n-->\nClean."),
+            ("own-machine", "Fine. <!-- checked on this machine --> Fine."),
+        ]:
+            with self.subTest(text=text):
+                self.assertIn((ENV, rule), problems(text))
+        for text in [
+            "Clean.\n<!-- session:panel-qa -->",
+            "```\n<!-- SCE-1 -->\n```",
+            "<!-- TODO: nothing here is a leftover -->",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(problems(text), [])
+
+    def test_a_tally_of_passes_and_failures_fails(self):
+        for text in [
+            "76 pass, 0 fail.",
+            "Result: 12 pass.",
+            "3 fail on the old head.",
+            "92 passed, 1 failed.",
+            "2 failures, both fixed.",
+            "40 tests pass.",
+        ]:
+            with self.subTest(text=text):
+                self.assertTrue({"test-tally", "test-count-passed"} & {r for _, r in problems(text)}, text)
+        for text in [
+            "A fail-safe stops it at 1 fail-over.",
+            "The second pass reads the cache.",
+            "It fails when the key is missing.",
+            "Version 2 failed to load the panel.",
+            "Android 13 failed to duplicate the audio.",
+            "Step 3 failed without the key.",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(problems(text), [])
+
+    def test_this_machine_and_the_host_fail_and_a_product_host_passes(self):
+        for text in [
+            "Checked on this machine.",
+            "It runs on this host with no network.",
+            "The host has no Android device.",
+            "Ran it on the host, then pushed.",
+        ]:
+            with self.subTest(text=text):
+                self.assertIn((ENV, "own-machine"), problems(text))
+        for text in [
+            "The host name comes from mDNS.",
+            "The host's name is shown on the card.",
+            "The device's address and the host in its URL are kept.",
+            "The host-side check reads the key.",
+            "This computer keeps the clipboard.",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(problems(text), [])
+
+    def test_a_rig_or_sandbox_change_may_name_the_host(self):
+        text = "The rig never writes the host plugin folder."
+        self.assertIn((ENV, "own-machine"), problems(text))
+        for files in (["dev/rig"], ["dev/sandbox"], ["docs/internals/development.md"], ["test/test_sandbox.py"]):
+            with self.subTest(files=files):
+                self.assertEqual(problems(text, files), [])
+        self.assertIn((ENV, "own-machine"), problems(text, ["README.md"]))
+
+
 class OpenItems(unittest.TestCase):
     def test_bad(self):
         for text in [
@@ -171,6 +240,15 @@ class OpenItems(unittest.TestCase):
             "Tracked separately, in the next release.",
             "The fold is tracked on its own issue.",
             "Still to write the fold test.",
+            "Note, does not block: the ellipsis re-flows.",
+            "This does not block the merge; the label moves.",
+            "Non-blocking: the label moves by a pixel.",
+            "One non-blocking note on the fold.",
+            "(not blocking) The label moves.",
+            "The label moves in a separate change.",
+            "A separate pull request takes the fold.",
+            "Left for the panel engineer.",
+            "The fold is left for a later release.",
             "- Fine.\n- The fold is not covered.\n- Fine too.",
             "Verdict: pass.\n\nNot blocking, for later: the ellipsis re-flows.",
         ]:
@@ -184,6 +262,27 @@ class OpenItems(unittest.TestCase):
             "- The fold is not covered: https://github.com/sceny/omarchy-paperclipai/issues/12",
             "Not checked in the panel.\nIt is tracked in #9.",
             "- Left for later\n  - the ellipsis (#4)",
+        ]:
+            with self.subTest(text=text):
+                self.assertNotIn(OPEN, checks(text))
+
+    def test_a_review_note_with_its_issue_passes(self):
+        for text in [
+            "Note, does not block: the ellipsis re-flows (#246).",
+            "Non-blocking: the label moves, tracked in sceny/omarchy-paperclipai#12.",
+            "The label moves in a separate change, #31.",
+            "Left for the panel engineer in #40.",
+        ]:
+            with self.subTest(text=text):
+                self.assertNotIn(OPEN, checks(text))
+
+    def test_product_words_near_a_review_note_pass(self):
+        for text in [
+            "A reader that never reads does not block the shell.",
+            "A non-blocking read of the clipboard, cut at a byte limit.",
+            "The room left for the title shrinks as the chip grows.",
+            "The step left for the user shows under the switch.",
+            "Each device keeps a separate cache.",
         ]:
             with self.subTest(text=text):
                 self.assertNotIn(OPEN, checks(text))
@@ -250,6 +349,9 @@ class UnlinkedReferences(unittest.TestCase):
             ("Reported upstream #42.", "named-upstream-bare-number"),
             ("KDE Connect #7 has the report.", "named-upstream-bare-number"),
             ("See ab#12.", "repo-without-owner"),
+            ("Filed as `sceny/omarchy-paperclipai`: #550.", "repo-without-owner"),
+            ("Filed as `sceny/omarchy-paperclipai` #550.", "repo-without-owner"),
+            ("Filed in sceny/omarchy-paperclipai: #550 and #551.", "repo-without-owner"),
         ]:
             with self.subTest(text=text):
                 self.assertIn((UNLINKED, rule), problems(text))
@@ -262,6 +364,9 @@ class UnlinkedReferences(unittest.TestCase):
             "See https://github.com/omacom/omarchy/issues/8753#issuecomment-1 and docs/x.md#12.",
             "Inline `omarchy#8753` is code.",
             "The C#5 sample compiles.",
+            "Filed as sceny/omarchy-paperclipai#550.",
+            "The rule lives in `dev/public-text-rules.json` (#12).",
+            "Read `docs/setup.md`: it says what #12 changed.",
         ]:
             with self.subTest(text=text):
                 self.assertNotIn(UNLINKED, checks(text))
@@ -271,6 +376,18 @@ class WholePullRequest(unittest.TestCase):
     def doc(self, *bodies, files=()):
         return {"changed_files": list(files), "texts": [
             {"url": "https://example.test/c/%d" % i, "body": body} for i, body in enumerate(bodies)]}
+
+    def test_only_the_body_and_the_commits_quote_the_rules_words(self):
+        text = "It never holds the rig or SCE-5."
+        files = ["dev/public-text-rules.json"]
+        for kind in ("body", "commit"):
+            with self.subTest(kind=kind):
+                doc = {"changed_files": files, "texts": [{"url": "u", "body": text, "kind": kind}]}
+                self.assertEqual(ptc.check_pull_request(RULES, doc), [])
+        for kind in ("title", "comment", "review", "review-comment", None):
+            with self.subTest(kind=kind):
+                doc = {"changed_files": files, "texts": [{"url": "u", "body": text, "kind": kind}]}
+                self.assertIn(ENV, {c for _, c, _, _ in ptc.check_pull_request(RULES, doc)})
 
     def test_every_kind_of_text_is_read_and_named_by_its_url(self):
         found = ptc.check_pull_request(RULES, self.doc("Clean.", "Ran it in the rig.", None, "Not tested."))
@@ -358,9 +475,20 @@ class Sources(unittest.TestCase):
         with mock.patch.object(ptc, "api", self.fake_api(responses)):
             return ptc.read_push(self.REPO, "aaa", "bbb", "token")
 
+    def test_each_text_carries_its_kind(self):
+        review = {"html_url": self.URL + "#pullrequestreview-1", "body": "Pass."}
+        doc = self.read({
+            "/repos/%s/pulls/62" % self.REPO: self.PR,
+            "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": "Clean."}}],
+            "/repos/%s/issues/62/comments" % self.REPO: [{"html_url": self.URL + "#issuecomment-1", "body": "Ok."}],
+            "/repos/%s/pulls/62/reviews" % self.REPO: [review],
+            "/repos/%s/pulls/62/comments" % self.REPO: [{"html_url": self.URL + "#discussion_r1", "body": "Nit."}],
+        })
+        self.assertEqual([t["kind"] for t in doc["texts"]], ["title", "body", "commit", "comment", "review", "review-comment"])
+
     def test_the_title_is_read_and_its_task_id_fails(self):
         doc = self.read({"/repos/%s/pulls/62" % self.REPO: self.PR})
-        self.assertIn({"url": self.URL, "body": self.TITLE}, doc["texts"])
+        self.assertIn({"url": self.URL, "body": self.TITLE, "kind": "title"}, doc["texts"])
         self.assertIn((ENV, "task-id"), checks_of(doc))
 
     def test_the_commit_messages_of_a_pull_request_are_read(self):
@@ -369,7 +497,7 @@ class Sources(unittest.TestCase):
             "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
         }
         doc = self.read(responses)
-        self.assertIn({"url": self.COMMIT_URL, "body": self.SQUASH}, doc["texts"])
+        self.assertIn({"url": self.COMMIT_URL, "body": self.SQUASH, "kind": "commit"}, doc["texts"])
         self.assertIn((ENV, "test-count"), checks_of(doc))
 
     def test_a_comment_on_a_closed_pull_request_does_not_reread_its_commits(self):
@@ -378,7 +506,7 @@ class Sources(unittest.TestCase):
             "/repos/%s/pulls/62/commits" % self.REPO: [{"html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}],
         }
         doc = self.read(responses)
-        self.assertIn({"url": self.URL, "body": self.TITLE}, doc["texts"])
+        self.assertIn({"url": self.URL, "body": self.TITLE, "kind": "title"}, doc["texts"])
         self.assertNotIn(self.COMMIT_URL, [text["url"] for text in doc["texts"]])
         self.assertNotIn((ENV, "test-count"), checks_of(doc))
 
@@ -389,7 +517,7 @@ class Sources(unittest.TestCase):
             "/repos/%s/pulls" % self.REPO: [],
         }
         texts, _, docs = self.push(responses)
-        self.assertEqual(texts, [{"url": self.COMMIT_URL, "body": self.SQUASH}])
+        self.assertEqual(texts, [{"url": self.COMMIT_URL, "body": self.SQUASH, "kind": "commit"}])
         self.assertEqual(docs, [])
 
     def test_a_push_to_develop_reads_the_comments_on_the_pull_request_it_merged(self):
@@ -456,6 +584,14 @@ class Standing(unittest.TestCase):
             self.assertEqual(sorted((w, r) for w, _, r, _ in found),
                              [("AGENTS.md:2", "date-as-history"), ("AGENTS.md:2", "owner-said"),
                               ("AGENTS.md:2", "task-id"), ("AGENTS.md:3", "owner-said")])
+
+    def test_a_standing_text_names_another_repository_s_issue_so_it_links(self):
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "AGENTS.md"), "w") as handle:
+                handle.write("Fixed in sceny/omarchy-paperclipai#550.\nFiled as `sceny/omarchy-paperclipai`: #551.\n<!-- SCE-9 -->\n")
+            found = ptc.check_standing(RULES, root)
+            self.assertEqual(sorted((w, r) for w, _, r, _ in found),
+                             [("AGENTS.md:2", "repo-without-owner"), ("AGENTS.md:3", "task-id")])
 
 
 class Rules(unittest.TestCase):
