@@ -12,6 +12,9 @@ and `session-status` (the session's process tree, the same way), `ps`,
 `pgrep -a`, `top` (any way it is run: `-c` only reverses what the user's
 `toprc` remembers), `/proc/<pid>/cmdline` and `environ`, and `ss -p` /
 `netstat -p`, which name a socket's process by a name any process can set.
+Each is caught as the call, however it is spelled: a shell line, after a
+prefix that runs it (`sudo top`, `timeout 5 top`), or as an argv list
+(`subprocess.run(["ps", "aux"])`).
 What the scripts in `bin/` and `lib/` print goes into the doctor bundle, and
 what `skills/` say to run goes into the session itself. A line that uses one
 is listed in ALLOWED with the reason its output reaches no AI session and holds
@@ -27,15 +30,27 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOLDERS = ("bin", "lib", "skills")
 
+# A list item in quotes: argv[0] of `subprocess.run([...])`, `execvp(...)`, or a
+# word after a prefix in the same list (`["sudo", "top"]`).
+ARGV = r"[\[(,]\s*[\"']%s[\"']\s*[,\])]"
+# What runs the next word as the command: `sudo top`, `timeout 5 top`,
+# `nice -n 10 top`, `env TERM=dumb top`.
+PREFIX = (r"\b(?:sudo|doas|exec|command|nohup|setsid|env|nice|ionice|timeout|stdbuf|runuser)"
+          r"(?:\s+-\S+(?:\s+[^\s-]\S*)?|\s+\S+=\S*|\s+\d\S*)*\s+")
+# Between a command and its next argument: a space, or the end of one quoted
+# list item and the start of the next.
+SEP = r"(?:\s+|[\"']\s*,\s*[\"'])"
+
 PROCESS_LISTS = [re.compile(p) for p in (
-    r"\bsystemctl\b.*\sstatus\b",
+    r"\bsystemctl\b.*[\s\"']status\b",
     r"\bsystemd-cgls\b",
-    r"\bloginctl\b.*\s(?:user|session)-status\b",
-    r"(?:^|[\s;|&(`$\"'])ps\s+[-a-z]",
-    r"\bpgrep\b.*\s-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
-    r"(?:^|[\s;|&(`$\"'])top(?:\s+-|\s*[;|&)`>])|(?:^\s*|[;|&(`$]\s*)top\s*$",
+    r"\bloginctl\b.*[\s\"'](?:user|session)-status\b",
+    r"(?:^|[\s;|&(`$\"'])ps\s+[-a-z]|" + ARGV % "ps",
+    r"\bpgrep\b.*[\s\"']-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
+    r"(?:^|[\s;|&(`$\"'])top(?:\s+-|\s*\d*[<>]|\s*[;|&)`])|(?:^\s*|[;|&(`$]\s*)top\s*$|"
+    + PREFIX + r"top\b(?![-.\w])|" + ARGV % "top",
     r"/proc/\S*/(?:cmdline|environ)\b",
-    r"\b(?:ss|netstat)\s+-[A-Za-z]*p",
+    r"\b(?:ss|netstat)" + SEP + r"-[A-Za-z]*p",
 )]
 
 # (file, the line, spaces collapsed) -> why what it prints reaches no AI session
@@ -114,6 +129,24 @@ class NoProcessListsForTheSession(unittest.TestCase):
             "ss -p": "ss -ltnp",
             "netstat -p": "netstat -ltnp",
             "a skill's command": "systemctl --user status paperclipai.service",
+            "systemctl status as argv": 'subprocess.run(["systemctl", "--user", "status", unit])',
+            "systemd-cgls as argv": "subprocess.run(['systemd-cgls', '--no-pager'])",
+            "loginctl user-status as argv": 'check_output(["loginctl", "user-status"])',
+            "loginctl session-status as argv": "run(['loginctl', 'session-status', sid])",
+            "ps as argv": 'subprocess.run(["ps", "aux"], capture_output=True)',
+            "ps alone as argv": 'check_output(["ps"])',
+            "pgrep -a as argv": 'subprocess.run(["pgrep", "-a", "node"])',
+            "top as argv": 'subprocess.run(["top", "-b", "-n", "1"])',
+            "top after a prefix as argv": 'subprocess.run(["timeout", "5", "top", "-b"])',
+            "ss -p as argv": 'subprocess.run(["ss", "-ltnp"])',
+            "netstat -p as argv": "run(['netstat', '-ltnp'])",
+            "sudo top": "sudo top",
+            "sudo -u top": "sudo -u someone top",
+            "timeout top": "timeout 5 top",
+            "nice top": "nice -n 10 top",
+            "env top": "env TERM=dumb top",
+            "top redirected before its options": "top 2>/dev/null -b",
+            "top fed from /dev/null": "top </dev/null",
         }
         for what, line in planted.items():
             with tempfile.TemporaryDirectory() as d:
@@ -132,7 +165,13 @@ class NoProcessListsForTheSession(unittest.TestCase):
                      "the top of the list", "stop -c", "top-level `url`",
                      "at the top.", "htop -c",
                      "paperclipai service status --json", "the steps it takes",
-                     "open('/proc/net/tcp')"):
+                     "open('/proc/net/tcp')",
+                     'subprocess.run(["systemctl", "--user", "show", unit, "--property=ActiveState"])',
+                     "subprocess.run(['pgrep', '-f', 'quickshell'])", 'run(["ss", "-ltn"])',
+                     'run(["loginctl", "show-user", user])', 'run(["htop"])', 'run(["pstree"])',
+                     '{"position": "top", "margin": 0}', "align: 'top',",
+                     "sudo is not needed at the top", "timeout is set at the top.",
+                     "env top-level keys", "the top 10 items", "the status of the top"):
             with tempfile.TemporaryDirectory() as d:
                 os.makedirs(os.path.join(d, "bin"))
                 with open(os.path.join(d, "bin", "tool"), "w") as f:
