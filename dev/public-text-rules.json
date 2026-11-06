@@ -138,7 +138,7 @@
       {
         "id": "not-checked",
         "regex": "\\bnot\\s+(?:yet\\s+|been\\s+)?(?:checked|tested|covered|verified|driven)\\b",
-        "unless_line": "^\\s*(?:(?:[-*+]|\\d+[.)]|>)\\s+)*Not\\s+verified:|not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
+        "unless_span": "^\\s*(?:(?:[-*+]|\\d+[.)]|>)\\s+)*Not\\s+verified:|not\\s+checked\\s+in\\s+a\\s+running\\s+shell"
       },
       {
         "id": "unchecked",
@@ -154,7 +154,7 @@
       },
       {
         "id": "later",
-        "unless_line": "\\b\\d+\\s*(?:ms|s|sec|min|h|days?)\\s+later\\b",
+        "unless_span": "\\b\\d+\\s*(?:ms|s|sec|min|h|days?)\\s+later\\b",
         "regex": "\\b(?:in|at|until|to|for)\\s+(?:a\\s+|the\\s+)?later\\b|\\blater\\s*(?:[.,;:)!?]|—|-\\s|$)|\\b(?:done|handled|fixed|checked|added|look(?:ed)?(?:\\s+at)?|decided?|do|dealt|revisit(?:ed)?|come\\s+back)\\s+(?:it\\s+|this\\s+)?later\\b"
       },
       {
@@ -188,7 +188,7 @@
       {
         "id": "left-for",
         "regex": "\\bleft\\s+for\\s+(?!(?:the\\s+)?(?:user|person|people)\\b)(?:the\\s+|a\\s+|an\\s+)?[\\w@-]+",
-        "unless_line": "\\b(?:room|space|width|height|pixels?|px|time|seconds?|nothing|little|much|what(?:\\s+is)?)\\s+left\\s+for\\b"
+        "unless_span": "\\b(?:room|space|width|height|pixels?|px|time|seconds?|nothing|little|much|what(?:\\s+is)?)\\s+left\\s+for\\b"
       }
     ],
     "reference": "(?:[\\w.-]+/[\\w.-]+)?#\\d+|https?://github\\.com/[\\w.-]+/[\\w.-]+/(?:issues|pull)/\\d+"

@@ -209,8 +209,9 @@ at the call catches the next variant.
    process of its service, and its command line carries the agent's key and the
    text it is sending. Nothing in `bin/`, `lib/` or `skills/` runs a tool that
    prints processes or their command lines (`systemctl status`, `systemd-cgls`,
-   `ps`, `pgrep -a`, `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`)
-   unless the line is on the allowlist with a reason. The doctor reads the
+   `loginctl user-status` or `session-status`, `ps`, `pgrep -a`, `top`,
+   `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`) unless the line
+   is on the allowlist with a reason. The doctor reads the
    service through `systemctl show` and a fixed list of properties, never
    `ExecStart` or `Environment`. A crash of the redacted probe names only the
    exception's type, and a number from the server is read as a number or as 0.
@@ -246,6 +247,8 @@ through the API, so a plain comment is read on the next run of any event.
 - A pull request about a tool may name it (`allowed_when_changed`); a pattern
   that catches a product word gets an exception in the rules file and a case
   in `test/test_public_text.py`, which holds a failing example of every class.
+- An exception by span (`unless_span`) blanks only the words it matches, so a
+  marker elsewhere on the same line still fails.
 - The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
   task numbers, dates and the owner's words as history, and for another
   repository's issue that GitHub does not link, in the unit tests
