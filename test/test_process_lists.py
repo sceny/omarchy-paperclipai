@@ -38,7 +38,7 @@ ARGV = r"[\[(,]\s*[\"'](?:[^\s\"']*/)?%s[\"']\s*[,\])]"
 # What runs the next word as the command: `sudo top`, `timeout 5 top`,
 # `nice -n 10 top`, `env TERM=dumb top`.
 PREFIX = (r"\b(?:sudo|doas|exec|command|nohup|setsid|env|nice|ionice|timeout|stdbuf|runuser)"
-          r"(?:\s+-\S+(?:\s+[^\s\d=-][^\s=]*)?|\s+[^\s-]\S*=\S*|\s+\d\S*)*\s+")
+          r"(?:\s+-\S+(?:\s+[^\s\d=-][^\s=]*)?|\s+[^\s\d=-][^\s=]*=\S*|\s+\d\S*)*\s+")
 # Between a command and its next argument: a space, or the end of one quoted
 # list item and the start of the next.
 SEP = r"(?:\s+|[\"']\s*,\s*[\"'])"
@@ -147,6 +147,8 @@ class NoProcessListsForTheSession(unittest.TestCase):
             "timeout top": "timeout 5 top",
             "nice top": "nice -n 10 top",
             "env top": "env TERM=dumb top",
+            "env top, a value holding =": "env A=b=c top",
+            "env top, a name from a digit": "env 1=2 top",
             "top redirected before its options": "top 2>/dev/null -b",
             "top fed from /dev/null": "top </dev/null",
             "prefixes in a row": "sudo -u x env A=b timeout 5 top",
@@ -193,10 +195,12 @@ class NoProcessListsForTheSession(unittest.TestCase):
                 self.assertEqual(process_lists(d, allowed={})[0], [], line)
 
     def test_a_long_prefix_line_is_read_quickly(self):
-        # Each `-n 1` after a prefix word must have one reading only, or a long
-        # `exec ...`/`env ...` line with no `top` in it backtracks for minutes.
+        # Each word after a prefix word (`-n 1`, `A=b=c`, `1=2`) must have one
+        # reading only, or a long `exec ...`/`env ...` line with no `top` in it
+        # backtracks for minutes.
         for line in ("nice" + " -n 1" * 200 + " x", "env" + " A=1" * 200 + " x",
-                     "ss" + " -t" * 200 + " x"):
+                     "env" + " a=b=c" * 200 + " x", "env" + " 1=2" * 200 + " x",
+                     "exec" + " -a 1=2" * 200 + " x", "ss" + " -t" * 200 + " x"):
             with tempfile.TemporaryDirectory() as d:
                 os.makedirs(os.path.join(d, "bin"))
                 with open(os.path.join(d, "bin", "tool"), "w") as f:
