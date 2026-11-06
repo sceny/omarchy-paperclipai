@@ -170,15 +170,16 @@ def check_open_items(rules, text):
     """(marker id, matched text) for each place something is left with no issue
     reference in its bullet or paragraph. A heading, or a line ending in a colon, that
     says something is left asks the same of the bullets (or the paragraph) under it."""
-    markers = [(m["id"], re.compile(m["regex"], re.I), re.compile(m["unless_line"], re.I) if "unless_line" in m else None)
+    markers = [(m["id"], re.compile(m["regex"], re.I), re.compile(m["unless_span"], re.I) if "unless_span" in m else None)
                for m in rules["markers"]]
     reference = re.compile(rules["reference"])
 
     def marker_in(block_text):
         for line in URL.sub(" ", block_text).split("\n"):
-            for rule_id, regex, unless_line in markers:
-                m = regex.search(line)
-                if m and not (unless_line and unless_line.search(line)):
+            for rule_id, regex, unless_span in markers:
+                # The exempt words are blanked, not the line: a marker beside them still counts.
+                m = regex.search(unless_span.sub(" ", line) if unless_span else line)
+                if m:
                     return rule_id, m.group(0)
         return None
 
