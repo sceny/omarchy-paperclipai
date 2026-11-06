@@ -105,7 +105,8 @@
       },
       {
         "id": "test-tally",
-        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)"
+        "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)",
+        "unless_before": "\\b(?:version|release|step|stage|phase|part|round|attempt|try|android|api|level|sdk|omarchy|qt|python|node|hyprland)\\s*$"
       },
       {
         "id": "test-count",
@@ -116,6 +117,12 @@
         "id": "own-machine",
         "regex": "\\bthis\\s+(?:machine|host)\\b|\\bthe\\s+host\\b(?!-|'s\\s+(?:name|key|address)|\\s+(?:names?|keys?|apps?|applications?|address(?:es)?|part|side|language|page|shell|program)\\b)",
         "unless_sentence": "\\b(?:mdns|avahi|dns|ssh|sshfs|urls?|uri|domains?|hostnames?|tailscale|mesh|peers?|lan|ip|dhcp|http|https)\\b",
+        "allowed_when_changed": [
+          "dev/sandbox*",
+          "dev/rig*",
+          "docs/internals/development.md",
+          "test/test_sandbox.py"
+        ],
         "quoted": true
       }
     ],
