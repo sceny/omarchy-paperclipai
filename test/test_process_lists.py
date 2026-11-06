@@ -9,7 +9,8 @@ sending (`-d '{"body": ...}'`, `gh ... --body`, `git commit -m`). A tool that
 prints processes prints all of that: `systemctl status` (its cgroup tree, each
 line in full when stdout is a pipe), `systemd-cgls`, `loginctl user-status`
 and `session-status` (the session's process tree, the same way), `ps`,
-`pgrep -a`, `top -c`, `/proc/<pid>/cmdline` and `environ`, and `ss -p` /
+`pgrep -a`, `top` (any way it is run: `-c` only reverses what the user's
+`toprc` remembers), `/proc/<pid>/cmdline` and `environ`, and `ss -p` /
 `netstat -p`, which name a socket's process by a name any process can set.
 What the scripts in `bin/` and `lib/` print goes into the doctor bundle, and
 what `skills/` say to run goes into the session itself. A line that uses one
@@ -32,7 +33,7 @@ PROCESS_LISTS = [re.compile(p) for p in (
     r"\bloginctl\b.*\s(?:user|session)-status\b",
     r"(?:^|[\s;|&(`$\"'])ps\s+[-a-z]",
     r"\bpgrep\b.*\s-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
-    r"(?:^|[\s;|&(`$\"'])top\s(?:.*\s)?-[A-Za-z1]*c[A-Za-z1]*\b",
+    r"(?:^|[\s;|&(`$\"'])top(?:\s+-|\s*[;|&)`>])|(?:^\s*|[;|&(`$]\s*)top\s*$",
     r"/proc/\S*/(?:cmdline|environ)\b",
     r"\b(?:ss|netstat)\s+-[A-Za-z]*p",
 )]
@@ -101,9 +102,13 @@ class NoProcessListsForTheSession(unittest.TestCase):
             "pgrep --list-full": "pgrep --list-full node",
             "loginctl user-status": "loginctl user-status --no-pager",
             "loginctl session-status": 'loginctl session-status "$XDG_SESSION_ID" >>"$bundle"',
+            "top": "top",
             "top -c": "top -c",
             "top -bc": "out=$(top -bcn1)",
             "top -b ... -c": "top -b -n 1 -c | head -40",
+            "top -bn1": "top -bn1 | head -5",
+            "top --cmdline-toggle": "top -b --cmdline-toggle",
+            "top into a file": 'top -b -n 1 >"$bundle"',
             "cmdline": 'tr "\\0" " " </proc/$pid/cmdline',
             "environ": "open('/proc/%d/environ' % pid)",
             "ss -p": "ss -ltnp",
@@ -124,7 +129,8 @@ class NoProcessListsForTheSession(unittest.TestCase):
                      "systemctl --user is-active paperclipai.service",
                      "pgrep -f 'quickshell' >/dev/null", "ss -ltn", "netstat -ltn",
                      "loginctl show-user \"$USER\" --property=Linger", "loginctl list-sessions",
-                     "top -bn1 | head -5", "the top of the list", "stop -c",
+                     "the top of the list", "stop -c", "top-level `url`",
+                     "at the top.", "htop -c",
                      "paperclipai service status --json", "the steps it takes",
                      "open('/proc/net/tcp')"):
             with tempfile.TemporaryDirectory() as d:

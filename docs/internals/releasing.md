@@ -209,7 +209,7 @@ at the call catches the next variant.
    process of its service, and its command line carries the agent's key and the
    text it is sending. Nothing in `bin/`, `lib/` or `skills/` runs a tool that
    prints processes or their command lines (`systemctl status`, `systemd-cgls`,
-   `loginctl user-status` or `session-status`, `ps`, `pgrep -a`, `top -c`,
+   `loginctl user-status` or `session-status`, `ps`, `pgrep -a`, `top`,
    `/proc/<pid>/cmdline` or `environ`, `ss -p`, `netstat -p`) unless the line
    is on the allowlist with a reason. The doctor reads the
    service through `systemctl show` and a fixed list of properties, never
