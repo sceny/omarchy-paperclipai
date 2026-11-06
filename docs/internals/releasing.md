@@ -251,6 +251,11 @@ through the API, so a plain comment is read on the next run of any event.
   in `test/test_public_text.py`, which holds a failing example of every class.
 - An exception by span (`unless_span`) blanks only the words it matches, so a
   marker elsewhere on the same line still fails.
+- An exception by words (`unless_near`) looks at four words either side of
+  the match, inside its sentence; a leak within four words of an exempting
+  word still passes, and the review reads for it.
+- The release notes (`CHANGELOG.md`) are public text too: the private-text
+  patterns `public_files` names read them on every run.
 - The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
   task numbers, dates and the owner's words as history, and for another
   repository's issue that GitHub does not link, in the unit tests
@@ -261,8 +266,14 @@ through the API, so a plain comment is read on the next run of any event.
   push to `develop` is refused, so the `release` workflow posts a `public-text`
   success status on the `main` commit it brings `develop` level with (a push to
   `main` has no pull request text).
-- The checker and its rules are the same files as in `sceny/omarchy-devices`;
-  a change to a class goes to both repositories.
+- The checker is the same file as in `sceny/omarchy-devices`, and the rules
+  differ only in each repository's own lines (`LOCAL_RULES` in the checker:
+  the repository's name, the `paperclip` pattern, the plugin id in the path
+  exceptions, `test/` against `tests/`). A change to a class goes to both
+  repositories. The `test` job fails when they drift
+  (`dev/public-text-check --twin`): it passes when they match the other
+  repository's `develop` or the head of one of its open pull requests, so the
+  pair lands one pull request at a time.
 
 ## Every pull request into `main`: the marketplace's checks
 
