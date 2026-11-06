@@ -7,13 +7,15 @@ command an agent runs. Their command lines carry agent keys (`--mcp-config`
 with an `Authorization` header, `curl -H ...`) and the text an agent is
 sending (`-d '{"body": ...}'`, `gh ... --body`, `git commit -m`). A tool that
 prints processes prints all of that: `systemctl status` (its cgroup tree, each
-line in full when stdout is a pipe), `systemd-cgls`, `ps`, `pgrep -a`,
-`/proc/<pid>/cmdline` and `environ`, and `ss -p` / `netstat -p`, which name a
-socket's process by a name any process can set. What the scripts in `bin/` and
-`lib/` print goes into the doctor bundle, and what `skills/` say to run goes
-into the session itself. A line that uses one is listed in ALLOWED with the
-reason its output reaches no AI session and holds no command line, or the build
-fails naming file:line. Comment lines are not read."""
+line in full when stdout is a pipe), `systemd-cgls`, `loginctl user-status`
+and `session-status` (the session's process tree, the same way), `ps`,
+`pgrep -a`, `top -c`, `/proc/<pid>/cmdline` and `environ`, and `ss -p` /
+`netstat -p`, which name a socket's process by a name any process can set.
+What the scripts in `bin/` and `lib/` print goes into the doctor bundle, and
+what `skills/` say to run goes into the session itself. A line that uses one
+is listed in ALLOWED with the reason its output reaches no AI session and holds
+no command line, or the build fails naming file:line. Comment lines are not
+read."""
 
 import os
 import re
@@ -27,8 +29,10 @@ FOLDERS = ("bin", "lib", "skills")
 PROCESS_LISTS = [re.compile(p) for p in (
     r"\bsystemctl\b.*\sstatus\b",
     r"\bsystemd-cgls\b",
+    r"\bloginctl\b.*\s(?:user|session)-status\b",
     r"(?:^|[\s;|&(`$\"'])ps\s+[-a-z]",
     r"\bpgrep\b.*\s-(?:[A-Za-z]*[al][A-Za-z]*\b|-list-(?:full|name)\b)",
+    r"(?:^|[\s;|&(`$\"'])top\s(?:.*\s)?-[A-Za-z1]*c[A-Za-z1]*\b",
     r"/proc/\S*/(?:cmdline|environ)\b",
     r"\b(?:ss|netstat)\s+-[A-Za-z]*p",
 )]
@@ -95,6 +99,11 @@ class NoProcessListsForTheSession(unittest.TestCase):
             "ps -ef": "out=$(ps -ef)",
             "pgrep -a": "pgrep -af paperclip",
             "pgrep --list-full": "pgrep --list-full node",
+            "loginctl user-status": "loginctl user-status --no-pager",
+            "loginctl session-status": 'loginctl session-status "$XDG_SESSION_ID" >>"$bundle"',
+            "top -c": "top -c",
+            "top -bc": "out=$(top -bcn1)",
+            "top -b ... -c": "top -b -n 1 -c | head -40",
             "cmdline": 'tr "\\0" " " </proc/$pid/cmdline',
             "environ": "open('/proc/%d/environ' % pid)",
             "ss -p": "ss -ltnp",
@@ -114,6 +123,8 @@ class NoProcessListsForTheSession(unittest.TestCase):
         for line in ("systemctl --user show paperclipai.service --property=ActiveState,MainPID",
                      "systemctl --user is-active paperclipai.service",
                      "pgrep -f 'quickshell' >/dev/null", "ss -ltn", "netstat -ltn",
+                     "loginctl show-user \"$USER\" --property=Linger", "loginctl list-sessions",
+                     "top -bn1 | head -5", "the top of the list", "stop -c",
                      "paperclipai service status --json", "the steps it takes",
                      "open('/proc/net/tcp')"):
             with tempfile.TemporaryDirectory() as d:
@@ -126,7 +137,8 @@ class NoProcessListsForTheSession(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "lib"))
             with open(os.path.join(d, "lib", "tool.sh"), "w") as f:
-                f.write("# systemctl status is what this does not do\n")
+                f.write("# systemctl status is what this does not do\n"
+                        "# nor loginctl user-status, loginctl session-status or top -bc\n")
             self.assertEqual(process_lists(d, allowed={})[0], [])
 
     def test_a_planted_process_list_in_the_real_tree_fails(self):
