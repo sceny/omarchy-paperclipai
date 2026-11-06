@@ -214,6 +214,19 @@ class OpenItems(unittest.TestCase):
         self.assertNotIn(OPEN, checks("> - Not verified: iOS (needs macOS)."))
         self.assertIn(OPEN, checks("> Not checked on iOS."))
 
+    def test_a_second_open_item_on_a_stated_gap_line_fails(self):
+        for text in [
+            "Not verified: iOS. Not checked on Android.",
+            "- Not verified: iOS. Not checked on Android.",
+            "1. Not verified: iOS. Not checked on Android.",
+            "> Not verified: iOS. Not checked on Android.",
+            "NOT VERIFIED: iOS, but not checked on Android.",
+        ]:
+            with self.subTest(text=text):
+                self.assertIn(OPEN, checks(text))
+        self.assertNotIn(OPEN, checks("Not verified: iOS."))
+        self.assertIn(OPEN, checks("The next read is 10 s later. Done later."))
+
     def test_words_that_are_not_a_leftover_pass(self):
         for text in [
             "A later change keeps the old keys.",

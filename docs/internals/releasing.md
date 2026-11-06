@@ -243,6 +243,8 @@ through the API, so a plain comment is read on the next run of any event.
 - A pull request about a tool may name it (`allowed_when_changed`); a pattern
   that catches a product word gets an exception in the rules file and a case
   in `test/test_public_text.py`, which holds a failing example of every class.
+- An exception by span (`unless_span`) blanks only the words it matches, so a
+  marker elsewhere on the same line still fails.
 - The same rules check the standing texts (`AGENTS.md`, `docs/internals/`) for
   task numbers, dates and the owner's words as history, in the unit tests
   (`dev/public-text-check --standing`).
