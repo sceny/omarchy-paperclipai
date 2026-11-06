@@ -203,6 +203,17 @@ class OpenItems(unittest.TestCase):
         self.assertNotIn(OPEN, checks("Not verified: iOS, no Mac here."))
         self.assertIn(OPEN, checks("- Not checked on iOS."))
 
+    def test_a_numbered_stated_gap_passes(self):
+        self.assertNotIn(OPEN, checks("1. Not verified: iOS (needs macOS)."))
+        self.assertNotIn(OPEN, checks("1) Not verified: iOS, no Mac here."))
+        self.assertIn(OPEN, checks("1. Not checked on iOS."))
+        self.assertIn(OPEN, checks("1) Not checked on iOS."))
+
+    def test_a_quoted_stated_gap_passes(self):
+        self.assertNotIn(OPEN, checks("> Not verified: iOS (needs macOS)."))
+        self.assertNotIn(OPEN, checks("> - Not verified: iOS (needs macOS)."))
+        self.assertIn(OPEN, checks("> Not checked on iOS."))
+
     def test_words_that_are_not_a_leftover_pass(self):
         for text in [
             "A later change keeps the old keys.",
