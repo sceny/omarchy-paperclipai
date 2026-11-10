@@ -18,6 +18,8 @@ import http from "node:http"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
+import fs from "node:fs"
+import os from "node:os"
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const script = path.join(root, "bin", "omarchy-paperclip-inbox")
@@ -372,10 +374,16 @@ await group("clear-failed counts before it clears, and only clears failures", as
 
 const probe = path.join(root, "bin", "omarchy-paperclip-status")
 
+// A machine with no Paperclip (CI) reads "not set up" before it reads the
+// inbox, so the probe gets a data dir that holds an instance.
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-data-"))
+fs.mkdirSync(path.join(dataDir, "instances", "default"), { recursive: true })
+
 function runProbe(...args) {
   return new Promise((resolve, reject) => {
     const child = spawn("python3", [probe, "--compact", ...args, "--api-base", base],
-                        { stdio: ["ignore", "pipe", "pipe"] })
+                        { stdio: ["ignore", "pipe", "pipe"],
+                          env: { ...process.env, PAPERCLIP_DATA_DIR: dataDir } })
     let out = ""
     child.stdout.on("data", (chunk) => { out += chunk })
     child.on("error", reject)
@@ -509,4 +517,5 @@ await group("an instance that is down is still a readable report", async () => {
 })
 
 server.close()
+fs.rmSync(dataDir, { recursive: true, force: true })
 console.log("all groups passed")

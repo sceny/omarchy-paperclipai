@@ -1,0 +1,534 @@
+#!/usr/bin/env python3
+"""The company's rules for public text, checked by a script.
+
+A pull request's public text is its body, every comment, every review and every
+review comment. Three checks read it, with their patterns in
+dev/public-text-rules.json (the environment check reads HTML comments too, since
+they are public in the text's source):
+
+  public-text-environment  names how or where we worked (tools, paths, test counts)
+  open-item-no-owner       says something is left, with no issue reference
+  unlinked-reference       names another repository's issue without its owner
+
+  dev/public-text-check --pr 123 [--repo owner/name]   read the pull request (GITHUB_TOKEN)
+  dev/public-text-check                                inside Actions: the event's pull request (a merge
+                                                       group's too), or on a push the commits it brings and
+                                                       the pull requests it touched
+  dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
+  dev/public-text-check --standing                     the same rules on the standing texts
+  dev/public-text-check --twin                         this checker and its rules against the twin
+                                                       repository's (GITHUB_TOKEN)
+
+A failure names the text's URL, the check and the rule. The matched words follow
+only outside CI (GITHUB_ACTIONS unset) or with --show-matches: a run log is public,
+and a match is often the private data itself. Exit 0 when nothing fails, 1 when
+something does, 2 when it cannot read.
+
+The twin repository (the rules' "twin") holds this same file and the same rules,
+apart from each repository's own lines (LOCAL_RULES). --twin fails when they
+drift: it passes when both match the twin's develop, or the head of one of its
+open pull requests, so a change made in both lands one pull request at a time.
+"""
+
+import argparse
+import base64
+import fnmatch
+import glob
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+RULES_FILE = os.path.join(HERE, "public-text-rules.json")
+MAX_SHOWN = 60
+
+FENCE = re.compile(r"^\s*(```|~~~)")
+URL = re.compile(r"https?://\S+")
+INLINE_CODE = re.compile(r"`[^`\n]*`")
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+BULLET = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+")
+HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+
+# The rules' lines that are each repository's own: its name and its twin's, the
+# paperclip pattern, its plugin id in the path exceptions, and its test folder.
+LOCAL_RULES = {
+    "keys": ("repository", "twin"),
+    "patterns": {"paperclip": ("regex",), "home-path": ("unless_match",),
+                 "dot-path": ("unless_match",), "runtime-dir": ("unless_match",)},
+    "test_folder": re.compile(r"^tests?/"),
+}
+TWIN_FILES = ("dev/public-text-check", "dev/public-text-rules.json")
+
+
+def load_rules(path=RULES_FILE):
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def shown(text):
+    """A match as the failure prints it: one short line with no control characters."""
+    text = re.sub(r"[^\x20-\x7e]", " ", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text if len(text) <= MAX_SHOWN else text[: MAX_SHOWN - 3] + "..."
+
+
+def blank_fences(text, comments=True):
+    """The text with fenced code blocks emptied, line for line, and its HTML
+    comments too unless `comments` is False (the comment's text is then read)."""
+    if comments:
+        text = HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    out, fenced = [], False
+    for line in text.split("\n"):
+        if FENCE.match(line):
+            fenced = not fenced
+            out.append("")
+        else:
+            out.append("" if fenced else line)
+    return out
+
+
+def changes_any(changed_files, globs):
+    return any(fnmatch.fnmatch(f, g) for g in globs for f in changed_files)
+
+
+SENTENCE_BREAK = re.compile(r"(?<=[.!?;:])\s+|\s[\u2014\u2013-]\s")
+
+
+NEAR_WORDS = 4
+
+
+def near_of(line, start, end):
+    """The span with the words around it: up to NEAR_WORDS words before and after,
+    never past the breaks (a full stop, ; : ! ? or a dash) of its sentence."""
+    lo, hi = 0, len(line)
+    for m in SENTENCE_BREAK.finditer(line):
+        if m.end() <= start:
+            lo = m.end()
+        elif m.start() >= end:
+            hi = m.start()
+            break
+    before = line[lo:start].split()[-NEAR_WORDS:]
+    after = line[end:hi].split()[:NEAR_WORDS]
+    return " ".join(before + [line[start:end]] + after)
+
+
+def find_all(patterns, text, changed_files=(), quoting_files=(), read_comments=False):
+    """(rule id, matched text) for every pattern match in the text's lines, after
+    the exceptions of the pattern: words near the match, a few words either
+    side inside its sentence (unless_near), the words just before it (unless_before), its own matched
+    text (unless_match) and the files the pull request changes
+    (allowed_when_changed: a pull request about a tool may name it; a pattern
+    marked `quoted` is also allowed by `quoting_files`, the files that hold the
+    rules and quote their words). `read_comments` reads the text of HTML comments."""
+    found = []
+    lines = [URL.sub(" ", line) for line in blank_fences(text, comments=not read_comments)]
+    for pat in patterns:
+        if changes_any(changed_files, pat.get("allowed_when_changed", [])):
+            continue
+        if pat.get("quoted") and changes_any(changed_files, quoting_files):
+            continue
+        regex = re.compile(pat["regex"], re.I)
+        exceptions = {key: re.compile(pat[key], re.I) for key in ("unless_near", "unless_before", "unless_match") if key in pat}
+        for line in lines:
+            for m in regex.finditer(line):
+                if "unless_match" in exceptions and exceptions["unless_match"].search(m.group(0)):
+                    continue
+                if "unless_before" in exceptions and exceptions["unless_before"].search(line[: m.start()]):
+                    continue
+                if "unless_near" in exceptions and exceptions["unless_near"].search(near_of(line, m.start(), m.end())):
+                    continue
+                found.append((pat["id"], m.group(0)))
+    return found
+
+
+def blocks(text):
+    """Bullets and paragraphs of the text (fenced code and inline code removed):
+    [{"text", "bullet", "lead"}]. A bullet holds its continuation lines
+    and its nested bullets; a paragraph runs to the next blank line or bullet. `lead`
+    marks a block that introduces what follows (a heading, or a line ending in a colon)."""
+    out, current, indent = [], None, 0
+
+    def close():
+        nonlocal current
+        if current is not None:
+            current["lead"] = bool(current["bullet"] is False and (current["heading"] or current["text"].rstrip().rstrip("*_ ").endswith(":")))
+            out.append(current)
+            current = None
+
+    for raw in blank_fences(text):
+        line = INLINE_CODE.sub(" ", raw)
+        if not line.strip():
+            if current is not None and not current["bullet"]:
+                close()
+            elif current is not None:
+                current["gap"] = True
+            continue
+        bullet = BULLET.match(line)
+        if HEADING.match(line):
+            close()
+            current = {"text": line, "bullet": False, "heading": True}
+            close()
+        elif bullet:
+            if current is not None and current["bullet"] and len(bullet.group(1)) > indent:
+                current["text"] += "\n" + line
+                continue
+            close()
+            indent = len(bullet.group(1))
+            current = {"text": line, "bullet": True, "heading": False}
+        elif current is not None and current["bullet"] and (line.startswith(" ") or not current.get("gap")):
+            current["text"] += "\n" + line
+        else:
+            if current is not None and current["bullet"]:
+                close()
+            if current is None:
+                current = {"text": line, "bullet": False, "heading": False}
+            else:
+                current["text"] += "\n" + line
+    close()
+    return out
+
+
+def check_open_items(rules, text):
+    """(marker id, matched text) for each place something is left with no issue
+    reference in its bullet or paragraph. A heading, or a line ending in a colon, that
+    says something is left asks the same of the bullets (or the paragraph) under it."""
+    markers = [(m["id"], re.compile(m["regex"], re.I), re.compile(m["unless_span"], re.I) if "unless_span" in m else None)
+               for m in rules["markers"]]
+    reference = re.compile(rules["reference"])
+
+    def marker_in(block_text):
+        for line in URL.sub(" ", block_text).split("\n"):
+            for rule_id, regex, unless_span in markers:
+                # The exempt words are blanked, not the line: a marker beside them still counts.
+                m = regex.search(unless_span.sub(" ", line) if unless_span else line)
+                if m:
+                    return rule_id, m.group(0)
+        return None
+
+    def has_reference(block_text):
+        return bool(reference.search(block_text))
+
+    found = []
+    parts = blocks(text)
+    i = 0
+    while i < len(parts):
+        part = parts[i]
+        hit = marker_in(part["text"])
+        if hit and not has_reference(part["text"].replace("\n", " ")):
+            if part["lead"] and i + 1 < len(parts):
+                j = i + 1
+                if parts[j]["bullet"]:
+                    while j < len(parts) and parts[j]["bullet"]:
+                        if not has_reference(parts[j]["text"]):
+                            found.append(hit)
+                        j += 1
+                elif not has_reference(parts[j]["text"]):
+                    found.append(hit)
+                    j += 1
+                else:
+                    j += 1
+                i = j
+                continue
+            found.append(hit)
+        i += 1
+    return found
+
+
+def find_unlinked(patterns, text, changed_files=()):
+    """(rule id, matched text) for each reference to another repository's issue that
+    GitHub does not link. Inline code is blanked first, unless the pattern
+    `reads_code`: one that finds a repository named in code just before a bare #n."""
+    found = []
+    for pat in patterns:
+        lines = blank_fences(text) if pat.get("reads_code") else [INLINE_CODE.sub(" ", line) for line in blank_fences(text)]
+        found += find_all([pat], "\n".join(lines), changed_files)
+    return found
+
+
+def check_text(rules, text, changed_files=(), may_quote=True):
+    """[(check, rule id, matched text)] for one public text. `may_quote` lets a
+    pull request that changes the rules quote the words of a `quoted` pattern: only
+    its body and its commits do, never a review or a comment."""
+    problems = []
+    env = rules["environment"]
+    quoting = env.get("quoted_when_changed", []) if may_quote else ()
+    for rule_id, matched in find_all(env["patterns"], text, changed_files, quoting, read_comments=True):
+        problems.append((rules["environment"]["check"], rule_id, matched))
+    for rule_id, matched in check_open_items(rules["open_item"], text):
+        problems.append((rules["open_item"]["check"], rule_id, matched))
+    for rule_id, matched in find_unlinked(rules["unlinked_reference"]["patterns"], text, changed_files):
+        problems.append((rules["unlinked_reference"]["check"], rule_id, matched))
+    return problems
+
+
+QUOTING_KINDS = ("body", "commit")
+
+
+def check_pull_request(rules, doc):
+    """Every problem in a pull request's public text: [(url, check, rule id, matched)]."""
+    files = doc.get("changed_files", [])
+    problems = []
+    for item in doc["texts"]:
+        may_quote = item.get("kind") in QUOTING_KINDS
+        for check, rule_id, matched in check_text(rules, item.get("body") or "", files, may_quote):
+            problems.append((item["url"], check, rule_id, matched))
+    return problems
+
+
+def check_files(globs, check, patterns, root=ROOT, finder=None):
+    """[(path:line, check, rule id, matched)] for the files the globs name, each line
+    outside a fenced block read on its own, HTML comments included; `finder` reads
+    a line in place of the environment's find_all."""
+    finder = finder or (lambda pats, line: find_all(pats, line, read_comments=True))
+    problems = []
+    for pattern in globs:
+        for path in sorted(glob.glob(os.path.join(root, pattern), recursive=True)):
+            with open(path) as handle:
+                lines = handle.read().split("\n")
+            fenced = False
+            for number, line in enumerate(lines, 1):
+                if FENCE.match(line):
+                    fenced = not fenced
+                    continue
+                if fenced:
+                    continue
+                for rule_id, matched in finder(patterns, line):
+                    where = "%s:%d" % (os.path.relpath(path, root), number)
+                    problems.append((where, check, rule_id, matched))
+    return problems
+
+
+def check_standing(rules, root=ROOT):
+    """[(path:line, check, rule id, matched)] for the standing texts: they say what is,
+    with no task numbers, dates or the owner's words as history, and name another
+    repository's issue so that GitHub links it."""
+    section = rules["standing"]
+    unlinked = rules["unlinked_reference"]
+    return (check_files(section["files"], section["check"], section["patterns"], root) +
+            check_files(section["files"], unlinked["check"], unlinked["patterns"], root, finder=find_unlinked))
+
+
+def check_public_files(rules, root=ROOT):
+    """[(path:line, check, rule id, matched)] for the release notes, which are public
+    text too: the private-text patterns of the environment check that a released
+    entry does not name."""
+    section = rules["public_files"]
+    patterns = [p for p in rules["environment"]["patterns"] if p["id"] in section["pattern_ids"]]
+    return check_files(section["files"], rules["environment"]["check"], patterns, root)
+
+
+def api(path, token):
+    """Every page of a GitHub API list, or the object itself."""
+    results, url = [], "https://api.github.com" + path
+    while url:
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + token,
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = json.load(response)
+            link = response.headers.get("Link", "")
+        if not isinstance(data, list):
+            return data
+        results += data
+        nxt = re.search(r'<([^>]+)>;\s*rel="next"', link)
+        url = nxt.group(1) if nxt else None
+    return results
+
+
+def read_pull_request(repo, number, token, commits=True):
+    base = "/repos/%s" % repo
+    pr = api("%s/pulls/%d" % (base, number), token)
+    texts = [{"url": pr["html_url"], "body": pr["title"], "kind": "title"},
+             {"url": pr["html_url"], "body": pr.get("body"), "kind": "body"}]
+    if commits and pr["state"] == "open":
+        for item in api("%s/pulls/%d/commits?per_page=100" % (base, number), token):
+            texts.append({"url": item["html_url"], "body": item["commit"]["message"], "kind": "commit"})
+    for path, kind in (("issues/%d/comments", "comment"), ("pulls/%d/reviews", "review"), ("pulls/%d/comments", "review-comment")):
+        for item in api("%s/%s?per_page=100" % (base, path % number), token):
+            texts.append({"url": item["html_url"], "body": item.get("body"), "kind": kind})
+    files = [f["filename"] for f in api("%s/pulls/%d/files?per_page=100" % (base, number), token)]
+    return {"changed_files": files, "texts": texts}
+
+
+def read_push(repo, before, after, token):
+    """The commit messages a push brings, the files it changes, and each pull request
+    the push merged, read as a pull request is read (not its commits: those were read
+    when the pull request was open). A pull request the push merged is one whose merge
+    commit the push brings; an open pull request, or one merged by another push, is
+    not this push's to fail."""
+    base = "/repos/%s" % repo
+    compare = api("%s/compare/%s...%s" % (base, before, after), token)
+    texts = [{"url": c["html_url"], "body": c["commit"]["message"], "kind": "commit"} for c in compare["commits"]]
+    files = [f["filename"] for f in compare.get("files", [])]
+    shas = {c["sha"] for c in compare["commits"]}
+    numbers = []
+    for sha in sorted(shas):
+        for pr in api("%s/commits/%s/pulls?per_page=100" % (base, sha), token):
+            if pr.get("merged_at") and pr.get("merge_commit_sha") in shas and pr["number"] not in numbers:
+                numbers.append(pr["number"])
+    docs = [read_pull_request(repo, number, token, commits=False) for number in numbers]
+    return texts, files, docs
+
+
+def check_push(rules, repo, event, token):
+    texts, files, docs = read_push(repo, event["before"], event["after"], token)
+    problems = check_pull_request(rules, {"changed_files": files, "texts": texts})
+    for doc in docs:
+        problems += check_pull_request(rules, doc)
+    return problems + check_public_files(rules)
+
+
+def read_event():
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        return {}
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def pull_request_number(event):
+    """The pull request an event is about. A merge queue names it only in the group's
+    branch, gh-readonly-queue/<base>/pr-<number>-<base sha>: that run reads the text as
+    it stands when the merge is asked for, so a review posted just before the merge is
+    read before the merge lands, not by the push after it."""
+    if event.get("pull_request"):
+        return event["pull_request"]["number"]
+    issue = event.get("issue") or {}
+    if issue.get("pull_request"):
+        return issue.get("number")
+    group = re.search(r"/pr-(\d+)-[0-9a-f]+$", (event.get("merge_group") or {}).get("head_ref", ""))
+    return int(group.group(1)) if group else None
+
+
+def shared_rules(rules):
+    """The rules without the lines that are each repository's own (LOCAL_RULES)."""
+    def walk(value, top=False):
+        if isinstance(value, dict):
+            out = {k: walk(v) for k, v in value.items() if not (top and k in LOCAL_RULES["keys"])}
+            for key in LOCAL_RULES["patterns"].get(value.get("id"), ()):
+                out.pop(key, None)
+            return out
+        if isinstance(value, list):
+            return [walk(v) for v in value]
+        if isinstance(value, str):
+            return LOCAL_RULES["test_folder"].sub("tests/", value)
+        return value
+    return walk(rules, top=True)
+
+
+def drift(checker, rules_text, twin_checker, twin_rules_text):
+    """The twin files that differ from ours: the checker byte for byte, the rules
+    apart from each repository's own lines."""
+    out = []
+    if checker != twin_checker:
+        out.append(TWIN_FILES[0])
+    if shared_rules(json.loads(rules_text)) != shared_rules(json.loads(twin_rules_text)):
+        out.append(TWIN_FILES[1])
+    return out
+
+
+def read_file(repo, path, ref, token):
+    data = api("/repos/%s/contents/%s?ref=%s" % (repo, path, ref), token)
+    return base64.b64decode(data["content"]).decode()
+
+
+def check_twin(rules, token, checker_path=__file__, rules_path=RULES_FILE):
+    """(where they match, []) or (None, the files that differ from the twin's develop)."""
+    with open(checker_path) as handle:
+        checker = handle.read()
+    with open(rules_path) as handle:
+        rules_text = handle.read()
+    twin = rules["twin"]
+    heads = [("%s develop" % twin, "develop")]
+    heads += [(pr["html_url"], pr["head"]["sha"]) for pr in api("/repos/%s/pulls?state=open&per_page=100" % twin, token)]
+    first = None
+    for where, ref in heads:
+        try:
+            theirs = [read_file(twin, path, ref, token) for path in TWIN_FILES]
+        except urllib.error.HTTPError as error:
+            if error.code == 404 and first is not None:
+                continue
+            raise
+        differ = drift(checker, rules_text, *theirs)
+        if not differ:
+            return where, []
+        first = first if first is not None else differ
+    return None, first
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Public text of a pull request against the company's rules.")
+    parser.add_argument("--pr", type=int)
+    parser.add_argument("--repo")
+    parser.add_argument("--fixture")
+    parser.add_argument("--standing", action="store_true")
+    parser.add_argument("--twin", action="store_true")
+    parser.add_argument("--rules", default=RULES_FILE)
+    parser.add_argument("--show-matches", action="store_true")
+    args = parser.parse_args(argv)
+    show_matches = args.show_matches or not os.environ.get("GITHUB_ACTIONS")
+    rules = load_rules(args.rules)
+    repo = args.repo or os.environ.get("GITHUB_REPOSITORY") or rules["repository"]
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    if args.twin:
+        if not token:
+            print("public-text-check: --twin needs GITHUB_TOKEN", file=sys.stderr)
+            return 2
+        try:
+            where, differ = check_twin(rules, token, rules_path=args.rules)
+        except (urllib.error.URLError, KeyError, ValueError) as error:
+            print("public-text-check: could not read the twin: %s" % type(error).__name__, file=sys.stderr)
+            return 2
+        for path in differ:
+            print("FAIL public-text-twin %s differs from %s develop" % (path, rules["twin"]))
+        if differ:
+            print("\nBring the same change to %s, or open its pull request." % rules["twin"])
+            return 1
+        print("public-text-check: the checker and its rules match %s" % where)
+        return 0
+
+    if args.standing:
+        problems = check_standing(rules)
+        what = "standing texts"
+    elif args.fixture:
+        with open(args.fixture) as handle:
+            doc = json.load(handle)
+        problems = check_pull_request(rules, doc) + check_public_files(rules)
+        what = "public text"
+    else:
+        event = read_event()
+        is_push = os.environ.get("GITHUB_EVENT_NAME") == "push" and not args.pr
+        number = args.pr or pull_request_number(event)
+        if not token or not (number or is_push):
+            print("public-text-check: give --pr (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
+            return 2
+        try:
+            if is_push:
+                problems = check_push(rules, repo, event, token)
+            else:
+                doc = read_pull_request(repo, number, token)
+                problems = check_pull_request(rules, doc) + check_public_files(rules)
+        except (urllib.error.URLError, KeyError, ValueError) as error:
+            print("public-text-check: could not read the pull request: %s" % type(error).__name__, file=sys.stderr)
+            return 2
+        what = "public text"
+
+    for where, check, rule_id, matched in problems:
+        detail = ": " + shown(matched) if show_matches else ""
+        print("FAIL %s [%s] %s%s" % (check, rule_id, where, detail))
+    if problems:
+        print("\n%d problem(s) in the %s. Edit the text; the check runs again on the edit." % (len(problems), what))
+        return 1
+    print("public-text-check: the %s passes" % what)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

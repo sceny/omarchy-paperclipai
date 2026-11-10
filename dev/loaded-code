@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Is the shell running the plugin's files, or the code it read at start?
+
+The shell reads a plugin's QML once. A rescan, a `git pull` or a rig sync
+changes the files and not the running code; only a shell restart loads them.
+An IPC call that old code also answers (`status`) proves nothing. This compares
+the functions the files declare in their IpcHandler with the functions the
+running shell lists for the plugin's target, so a function only the new code
+has settles it.
+
+  dev/loaded-code [PLUGIN_DIR] [--target ID]
+  dev/rig exec -- dev/loaded-code PLUGIN_DIR       # in a rig
+
+Exit 0: they match. 1: the running code is older or newer than the files.
+2: the shell or the target could not be read. It sees functions added or
+removed, not an edited body; for a body, restart the shell.
+"""
+import glob
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+PLUGIN_ID = "sceny.paperclipai"
+IPC_TARGET = "paperclip"
+
+
+def declared_functions(plugin_dir):
+    names = set()
+    for path in glob.glob(os.path.join(plugin_dir, "*.qml")):
+        text = open(path, encoding="utf-8").read()
+        for m in re.finditer(r"\bIpcHandler\s*\{", text):
+            depth, i = 1, m.end()
+            while i < len(text) and depth:
+                depth += {"{": 1, "}": -1}.get(text[i], 0)
+                i += 1
+            for f in re.finditer(r"^\s*function\s+(\w+)\s*\(", text[m.end():i], re.M):
+                names.add(f.group(1))
+    return names
+
+
+def listed_functions(show_output, target):
+    names, inside = set(), False
+    for line in show_output.splitlines():
+        if line.startswith("target "):
+            inside = line.split(None, 1)[1].strip() == target
+        elif inside:
+            m = re.match(r"\s+function\s+(\w+)\s*\(", line)
+            if m:
+                names.add(m.group(1))
+    return names, any(l.strip() == f"target {target}" for l in show_output.splitlines())
+
+
+def main(argv):
+    args, target, plugin_dir = argv[1:], IPC_TARGET, None
+    while args:
+        a = args.pop(0)
+        if a == "--target":
+            target = args.pop(0)
+        else:
+            plugin_dir = a
+    plugin_dir = plugin_dir or os.path.expanduser(f"~/.config/omarchy/plugins/{PLUGIN_ID}")
+    shell_dir = os.environ.get("OMARCHY_PATH") or "/usr/share/omarchy"
+    cmd = shlex.split(os.environ.get("LOADED_CODE_SHOW_CMD") or "") or [
+        "qs", "ipc", "-n", "-p", os.path.join(shell_dir, "shell"), "show"]
+    for attempt in range(3):
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            done = subprocess.CompletedProcess(cmd, 1, "", "")
+        listed, found = listed_functions(done.stdout, target)
+        if found and not done.returncode:
+            break
+        time.sleep(1)
+    if done.returncode or not found:
+        print(f"cannot read the running shell's IPC for target {target}", file=sys.stderr)
+        return 2
+    files = declared_functions(plugin_dir)
+    missing, extra = sorted(files - listed), sorted(listed - files)
+    if not missing and not extra:
+        print(f"loaded code matches the files ({len(files)} IPC functions)")
+        return 0
+    if missing:
+        print("the files have functions the running shell does not: " + ", ".join(missing))
+    if extra:
+        print("the running shell has functions the files no longer have: " + ", ".join(extra))
+    print("restart the shell to load the files (omarchy-restart-shell)")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

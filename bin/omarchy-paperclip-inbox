@@ -36,9 +36,7 @@ import importlib.util
 import json
 import os
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,39 +65,40 @@ def load_probe():
 
 
 class Writer:
-    """POST/DELETE client. Every call answers with (ok, status, payload)."""
+    """POST/DELETE client. Every call answers with (ok, status, payload).
 
-    def __init__(self, base: str, token: str, timeout: float):
+    The request itself is the probe's `fetch`: no redirect is followed, the
+    token goes only to the user's own listener, and a body is read with a cap.
+    """
+
+    def __init__(self, base: str, token: str, timeout: float, fetch=None):
         self.base = base
         self.token = token
         self.timeout = timeout
+        self.fetch = fetch
 
     def send(self, method: str, path: str, body=None):
-        data = None
-        request = urllib.request.Request(self.base + path, method=method)
-        request.add_header("Accept", "application/json")
-        if body is not None:
-            data = json.dumps(body).encode("utf-8")
-            request.add_header("Content-Type", "application/json")
-        if self.token:
-            request.add_header("Authorization", "Bearer " + self.token)
-        try:
-            with urllib.request.urlopen(request, data=data, timeout=self.timeout) as response:
-                raw = response.read()
-                status = response.status
-        except urllib.error.HTTPError as error:
-            raw = b""
-            try:
-                raw = error.read()
-            except OSError:
-                pass
-            return False, error.code, parse_body(raw)
-        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as error:
-            return False, 0, {"error": "%s: the instance did not answer" % type(error).__name__}
-        return True, status, parse_body(raw)
+        reply = self.fetch(self.base, self.token, method, path, body, self.timeout)
+        if reply.code in ("untrusted", "insecure"):
+            return False, 0, {"error": REFUSED[reply.code], "code": "token_withheld"}
+        if reply.code in ("redirect", "too-large"):
+            return False, reply.status, {"error": reply.error}
+        if reply.code == "no-listener":
+            return False, 0, {"error": "Paperclip is not running."}
+        if reply.status == 0:
+            return False, 0, {"error": "%s: the instance did not answer" % reply.error}
+        if reply.error:
+            return False, reply.status, parse_body(reply.raw)
+        return True, reply.status, parse_body(reply.raw)
 
     def get(self, path: str):
         return self.send("GET", path)
+
+
+REFUSED = {
+    "untrusted": "Another user's program is listening at Paperclip's address, so nothing was sent.",
+    "insecure": "Nothing is sent over plain http to another host. Use an https address.",
+}
 
 
 def parse_body(raw: bytes):
@@ -366,10 +365,11 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=20.0)
     args = parser.parse_args(argv)
 
+    os.umask(0o077)
     probe = load_probe()
     instance = args.instance or probe.env("PAPERCLIP_OMARCHY_INSTANCE", "default")
     writer = Writer(probe.resolve_api_base(args.api_base, instance),
-                    probe.read_token(), max(1.0, args.timeout))
+                    probe.read_token(), max(1.0, args.timeout), probe.fetch)
 
     if not args.company:
         emit({"ok": False, "action": args.command, "message": "No company id was given."})

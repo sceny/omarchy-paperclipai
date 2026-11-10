@@ -20,7 +20,7 @@ const BELL = ""
 // Every state the probe can put in a report. derive_state() in
 // bin/omarchy-paperclip-status is the other half of this list.
 const STATES = [
-  "unknown", "not-installed", "stopped", "needs-auth",
+  "unknown", "not-installed", "stopped", "needs-auth", "untrusted-listener",
   "probe-failed", "needs-you", "working", "idle"
 ]
 
@@ -39,6 +39,7 @@ group("the mark is a paperclip in every state", () => {
 
 group("state tones and labels", () => {
   assert.equal(Model.stateTone("stopped"), "alarm")
+  assert.equal(Model.stateTone("untrusted-listener"), "alarm")
   assert.equal(Model.stateTone("probe-failed"), "alarm")
   assert.equal(Model.stateTone("needs-you"), "attention")
   assert.equal(Model.stateTone("working"), "working")
@@ -62,6 +63,43 @@ group("the tiles report the three counts", () => {
   const empty = Model.statTiles(null)
   assert.deepEqual(empty.map((t) => t.value), [0, 0, 0])
   assert.deepEqual(empty.map((t) => t.tone), ["quiet", "quiet", "quiet"])
+})
+
+group("the cards filter the lists and never the counts", () => {
+  const report = {
+    attention: 3, working: 2, failedRuns: 1, inboxTotal: 3, retryableCount: 1,
+    needs: [{ kind: "failed_run", title: "a" }, { kind: "approval", title: "b" }, { kind: "approval", title: "c" }],
+    moving: [{ title: "w1" }, { title: "w2" }]
+  }
+  const need = (f) => Model.filterNeedRows(report.needs, f).map((r) => r.title)
+  const move = (f) => Model.filterMovingRows(report.moving, f).map((r) => r.title)
+
+  assert.deepEqual(need(""), ["a", "b", "c"])
+  assert.deepEqual(move(""), ["w1", "w2"])
+  assert.deepEqual(need(Model.TILE_ATTENTION), ["a", "b", "c"])
+  assert.deepEqual(move(Model.TILE_ATTENTION), [])
+  assert.deepEqual(need(Model.TILE_WORKING), [])
+  assert.deepEqual(move(Model.TILE_WORKING), ["w1", "w2"])
+  assert.deepEqual(need(Model.TILE_FAILED), ["a"])
+  assert.deepEqual(move(Model.TILE_FAILED), [])
+
+  // The card shows its own count whatever the filter hides.
+  assert.deepEqual(Model.statTiles(report).map((t) => t.value), [3, 2, 1])
+
+  // A card at zero cannot hold the filter; one with rows can.
+  assert.equal(Model.activeTileFilter(report, "failed"), "failed")
+  assert.equal(Model.activeTileFilter({ working: 0 }, "working"), "")
+  assert.equal(Model.activeTileFilter(report, "nonsense"), "")
+  assert.equal(Model.activeTileFilter(null, "attention"), "")
+
+  // Clicking the selected card clears it; another card replaces it.
+  assert.equal(Model.toggleTileFilter("", "failed"), "failed")
+  assert.equal(Model.toggleTileFilter("failed", "failed"), "")
+  assert.equal(Model.toggleTileFilter("failed", "working"), "working")
+
+  // Under the failed filter, "more waiting" counts failed runs, not the inbox.
+  assert.equal(Model.moreWaiting({ inboxTotal: 9, retryableCount: 4 }, 1, "failed"), 3)
+  assert.equal(Model.moreWaiting({ inboxTotal: 9, retryableCount: 4 }, 1, ""), 8)
 })
 
 group("the footer only advertises keys that do something", () => {
@@ -497,6 +535,185 @@ group("a snooze that ends says so once, and never replays the backlog", () => {
   // Notifications off means off, snooze or no snooze.
   assert.equal(Model.wakeNotification(waiting, Model.NOTIFY_OFF), null)
   assert.equal(Model.wakeNotification(null, Model.NOTIFY_NEEDED), null)
+})
+
+group("text from the instance is inert in a notification", () => {
+  const WJ = "\u2060"
+  for (const hostile of ["--app-name=x", "-u", "--image=/x", "--exec", "-r", "  --replace-id=4"]) {
+    for (const make of [Model.notificationSummary, Model.notificationBody]) {
+      const out = make(hostile)
+      assert.ok(out.startsWith(WJ), JSON.stringify(hostile) + " must not start with a dash")
+      assert.ok(!/^\s*-/.test(out), JSON.stringify(out))
+      assert.ok(out.endsWith(hostile), "the words are kept")
+    }
+  }
+  assert.equal(Model.notificationBody("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;")
+  assert.equal(Model.notificationBody("a & b"), "a &amp; b")
+  assert.equal(Model.notificationBody("&lt;"), "&amp;lt;", "an entity is not decoded twice")
+  assert.equal(Model.notificationBody("-<b>"), WJ + "-&lt;b&gt;")
+  // The summary is drawn as plain text, so it is not escaped.
+  assert.equal(Model.notificationSummary("a <b> & c"), "a <b> & c")
+  assert.equal(Model.notificationSummary("Fix the build"), "Fix the build")
+  assert.equal(Model.notificationBody("-50% off"), WJ + "-50% off")
+  assert.equal(Model.notificationBody(undefined), "")
+  assert.equal(Model.notificationBody(null), "")
+
+  // A decision whose title is an option comes out of the diff, then through
+  // the same functions the service uses.
+  const row = { key: "a:1", kind: "approval", title: "--app-name=omarchy-action", detail: "<img src=x>", severity: "normal" }
+  const diff = Model.diffNotifications(
+    { reachable: true, needs: [], moving: [] },
+    { reachable: true, needs: [row], moving: [] },
+    Model.NOTIFY_NEEDED, {})
+  assert.equal(diff.notifications.length, 1)
+  const n = diff.notifications[0]
+  assert.ok(Model.notificationSummary(n.summary).startsWith(WJ))
+  assert.equal(Model.notificationBody(n.body), "&lt;img src=x&gt;")
+})
+
+group("a notification request carries the words as data for the helper", () => {
+  const WJ = "\u2060"
+  const item = { summary: "--app-name=x", body: "<b>why</b>", urgency: "critical", glyph: "G" }
+  const exec = ["/p/open", "https://127.0.0.1:3100/PAP-1"]
+  const req = Model.notificationRequest(item, "Paperclip", "F", exec)
+  assert.deepEqual(req, { appName: "Paperclip", urgency: "critical", glyph: "G",
+    summary: WJ + "--app-name=x", body: "&lt;b&gt;why&lt;/b&gt;", exec })
+  const bare = Model.notificationRequest({}, "", "F", [])
+  assert.deepEqual(bare, { appName: "Paperclip", urgency: "normal", glyph: "F",
+    summary: "Paperclip", body: "" })
+  assert.equal(Model.notificationRequest({ glyph: "" }, "omarchy-action", "", null).glyph, "")
+  assert.equal(JSON.parse(JSON.stringify(req)).exec[1], exec[1])
+})
+
+group("the service row says what the report says and offers one thing", () => {
+  const managed = { installed: true, active: true, activeState: "active" }
+  const running = (extra) => Object.assign({ state: "idle", reachable: true, working: 0, service: managed, cli: { installed: true } }, extra)
+  const stopped = (extra) => Object.assign({ state: "stopped", reachable: false, working: 0,
+    service: { installed: true, active: false, activeState: "inactive" }, cli: { installed: true } }, extra)
+
+  // Nothing to say before the first report, or when the plugin has no
+  // instance to speak of.
+  for (const report of [null, undefined, { state: "unknown" }, { state: "not-installed" },
+                        { state: "untrusted-listener", reachable: false }]) {
+    const control = Model.serviceControl(report, "")
+    assert.equal(control.state, "unavailable")
+    assert.equal(control.action, "")
+  }
+
+  // Running as the background service: Stop, and no question when idle.
+  let c = Model.serviceControl(running(), "")
+  assert.deepEqual([c.state, c.action, c.confirm], ["running", "stop", false])
+  // Every reachable state is running, including one that needs a token.
+  for (const state of ["idle", "working", "needs-you", "needs-auth"]) {
+    assert.equal(Model.serviceControl(running({ state }), "").state, "running", state)
+  }
+
+  // Agents at work: Stop asks once, and says how many.
+  c = Model.serviceControl(running({ state: "working", working: 3 }), "")
+  assert.deepEqual([c.action, c.confirm, c.working], ["stop", true, 3])
+  assert.equal(Model.stopConfirmText(3), "3 agents at work — press again")
+  assert.equal(Model.stopConfirmText(1), "1 agent at work — press again")
+
+  // Started in a terminal: no Stop is offered, because none exists.
+  c = Model.serviceControl(running({ state: "working", working: 2, service: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action, c.confirm], ["running", "", false])
+  assert.ok(c.detail.includes("terminal"))
+
+  // Stopped: Start for the service, Start for a CLI that runs in a terminal,
+  // nothing when there is neither.
+  c = Model.serviceControl(stopped(), "")
+  assert.deepEqual([c.state, c.action], ["stopped", "start"])
+  c = Model.serviceControl(stopped({ service: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action, c.detail], ["stopped", "start", "Starts in a terminal"])
+  c = Model.serviceControl(stopped({ service: { installed: false }, cli: { installed: false } }), "")
+  assert.deepEqual([c.state, c.action], ["stopped", ""])
+
+  // The panel's own ask shows at once, with nothing to press meanwhile.
+  c = Model.serviceControl(stopped(), "start")
+  assert.deepEqual([c.state, c.action], ["starting", ""])
+  c = Model.serviceControl(running(), "stop")
+  assert.deepEqual([c.state, c.action], ["stopping", ""])
+  c = Model.serviceControl(stopped({ service: { installed: true, active: true, activeState: "active" } }), "stop")
+  assert.equal(c.state, "stopping")
+
+  // A change made outside the panel is followed from the report alone.
+  assert.equal(Model.serviceControl(stopped({ service: { installed: true, active: false, activeState: "activating" } }), "").state, "starting")
+  assert.equal(Model.serviceControl(running({ service: { installed: true, active: true, activeState: "deactivating" } }), "").state, "stopping")
+  // Up but not answering: Stop is still there, so a stuck one can be ended.
+  c = Model.serviceControl(stopped({ service: { installed: true, active: true, activeState: "active" } }), "")
+  assert.deepEqual([c.state, c.action], ["starting", "stop"])
+})
+
+group("a pending ask ends when the report agrees, and not before", () => {
+  const up = { reachable: true, service: { active: true, activeState: "active" } }
+  const down = { reachable: false, service: { active: false, activeState: "inactive" } }
+  const shuttingDown = { reachable: false, service: { active: true, activeState: "deactivating" } }
+  assert.equal(Model.settlePending("start", down), "start")
+  assert.equal(Model.settlePending("start", up), "")
+  assert.equal(Model.settlePending("stop", up), "stop")
+  assert.equal(Model.settlePending("stop", shuttingDown), "stop")
+  assert.equal(Model.settlePending("stop", down), "")
+  assert.equal(Model.settlePending("", up), "")
+  assert.equal(Model.settlePending("stop", null), "stop")
+  assert.ok(Model.SERVICE_PENDING_MS >= 60000, "a start waits up to a minute for health")
+})
+
+group("the footer offers the service key only when it does something", () => {
+  const keys = (report) => Model.hintKeys(report).map((h) => h.key)
+  const label = (report) => Model.hintKeys(report).find((h) => h.key === "v").label
+  const managed = { installed: true, active: true, activeState: "active" }
+  assert.ok(!keys({ state: "not-installed" }).includes("v"))
+  assert.ok(!keys({ state: "idle", reachable: true, service: { installed: false } }).includes("v"))
+  assert.equal(label({ state: "idle", reachable: true, service: managed }), "stop")
+  assert.equal(label({ state: "stopped", reachable: false, service: { installed: true, active: false }, cli: { installed: true } }), "start")
+
+  // While a start or stop is under way, neither the key nor the card offers it again.
+  const down = { state: "stopped", reachable: false, service: { installed: true, active: false } }
+  const up = { state: "idle", reachable: true, service: { installed: true, active: true, activeState: "active" } }
+  const hasV = (r, pending) => Model.hintKeys(r, null, pending).some((h) => h.key === "v")
+  assert.ok(hasV(up, "") && hasV(down, ""))
+  assert.ok(!hasV(down, "start"), "start pending")
+  assert.ok(!hasV(up, "stop"), "stop pending")
+  assert.equal(Model.primaryAction(down, "start"), null)
+  assert.equal(Model.primaryAction(down, "").id, "start")
+})
+
+// "Keep Paperclip running": a stop seen from outside the panel is not undone.
+group("auto-start step", () => {
+  const down = (unit, extra) => Object.assign({ state: "stopped", reachable: false,
+    service: { installed: true, active: false, activeState: unit } }, extra)
+  const up = { state: "idle", reachable: true, service: { installed: true, active: true, activeState: "active" } }
+
+  // Down at the first look: start it.
+  assert.deepEqual(Model.autoStartStep(false, down("inactive"), true, false), { action: "start", wasUp: false })
+  // Answering, then cleanly inactive (systemctl stop, paperclipai service stop): record it, do not start.
+  assert.deepEqual(Model.autoStartStep(true, down("inactive"), true, false), { action: "mark-stopped", wasUp: false })
+  // Recorded even with the setting Off: turning it On later must not undo the stop.
+  assert.equal(Model.autoStartStep(true, down("inactive"), false, false).action, "mark-stopped")
+  // A crash is not a stop.
+  assert.equal(Model.autoStartStep(true, down("failed"), true, false).action, "start")
+  // The setting Off starts nothing.
+  assert.equal(Model.autoStartStep(false, down("inactive"), false, false).action, "")
+  // Answering: remember it, do nothing.
+  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "", wasUp: true })
+  // In transition the unit gets neither, and the memory of "was up" survives to the next look.
+  for (const unit of ["deactivating", "activating"]) {
+    assert.deepEqual(Model.autoStartStep(true, down(unit), true, false), { action: "", wasUp: true }, unit)
+  }
+  // The unit is up and not answering yet: starting, not stopped.
+  const starting = down("active", { service: { installed: true, active: true, activeState: "active" } })
+  assert.deepEqual(Model.autoStartStep(true, starting, true, false), { action: "", wasUp: true })
+  // The sequence of a terminal stop: up, deactivating, inactive.
+  let step = Model.autoStartStep(false, up, true, false)
+  step = Model.autoStartStep(step.wasUp, down("deactivating"), true, false)
+  step = Model.autoStartStep(step.wasUp, down("inactive"), true, false)
+  assert.equal(step.action, "mark-stopped")
+  // The panel's own start or stop in flight: nothing, and nothing forgotten.
+  assert.deepEqual(Model.autoStartStep(true, down("inactive"), true, true), { action: "", wasUp: true })
+  // No background service, or no report: nothing to start.
+  assert.equal(Model.autoStartStep(false, down("", { service: { installed: false } }), true, false).action, "")
+  assert.equal(Model.autoStartStep(false, null, true, false).action, "")
+  assert.equal(Model.autoStartStep(false, { state: "needs-you", reachable: true }, true, false).action, "")
 })
 
 console.log("all groups passed")

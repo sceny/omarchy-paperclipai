@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "sceny.paperclipai",
   "name": "Paperclip",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Sceny",
   "license": "MIT",
   "homepage": "https://github.com/sceny/omarchy-paperclipai",
@@ -62,7 +62,7 @@
         "label": "Keep Paperclip running",
         "options": ["On", "Off"],
         "defaultValue": "On",
-        "description": "Start the background service again when the instance is found down (at most once every ten minutes)."
+        "description": "Start the background service when the instance is found down, at most once every ten minutes for the whole shell. A stop (from the panel, systemctl or the CLI) keeps it stopped until you press Start or the shell restarts. Turn this Off to keep it stopped regardless."
       },
       {
         "key": "showCount",
