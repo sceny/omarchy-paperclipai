@@ -282,6 +282,95 @@ await group("an instance that is not answering is a sentence, not a crash", asyn
   assert.ok(result.message.length > 0)
 })
 
+// ------------------------------------------------------------ the skip report
+
+const SINCE = "2026-11-08T10:00:00Z"
+
+function reportSkip(stateHome, stdinText, ...args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", [script, "report-skip", ...args, "--api-base", base, "--timeout", "5"],
+                        { stdio: ["pipe", "pipe", "pipe"],
+                          env: { ...process.env, XDG_STATE_HOME: stateHome } })
+    let out = ""
+    let err = ""
+    child.stdout.on("data", (chunk) => { out += chunk })
+    child.stderr.on("data", (chunk) => { err += chunk })
+    child.on("error", reject)
+    child.on("close", (code) => {
+      try {
+        const lines = out.split("\n").filter((line) => line.trim() !== "")
+        resolve({ code: code, last: JSON.parse(lines[lines.length - 1]), stderr: err })
+      } catch {
+        reject(new Error("unparseable output: " + out + err))
+      }
+    })
+    child.stdin.end(stdinText)
+  })
+}
+
+function skipStateHome(target) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-state-"))
+  if (target) {
+    const dir = path.join(home, "omarchy", "paperclipai")
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, "skip-report.json"), JSON.stringify(target))
+  }
+  return home
+}
+
+const ISSUES = "POST /api/companies/" + COMPANY + "/issues"
+
+await group("a skip with no owner set on this machine files nothing", async () => {
+  routes[ISSUES] = { status: 201, body: { id: "issue-1" } }
+  const home = skipStateHome(null)
+  const result = await reportSkip(home, "on 'detached HEAD', not develop",
+                                  "--plugin", "sceny.devices", "--since", SINCE)
+  assert.equal(result.last.ok, false)
+  assert.equal(seen.length, 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+await group("a skip files one task for the plugin line, with the plugin, the start and the reason", async () => {
+  routes[ISSUES] = { status: 201, body: { id: "issue-1", identifier: "SCE-1" } }
+  const home = skipStateHome({ companyId: COMPANY, assigneeAgentId: "agent-omar" })
+  const result = await reportSkip(home, "on 'detached HEAD', not develop\n",
+                                  "--plugin", "sceny.devices", "--since", SINCE)
+  assert.equal(result.last.ok, true)
+  assert.equal(seen.length, 1)
+  const body = seen[0].body
+  assert.equal(body.assigneeAgentId, "agent-omar")
+  assert.equal(body.status, "todo")
+  assert.ok(body.title.indexOf("sceny.devices") >= 0)
+  assert.ok(body.description.indexOf(SINCE) >= 0)
+  assert.ok(body.description.indexOf("Reason: on 'detached HEAD', not develop") >= 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+await group("a skip with a malformed plugin id or start time is refused before any call", async () => {
+  routes[ISSUES] = { status: 201, body: { id: "issue-1" } }
+  const home = skipStateHome({ companyId: COMPANY, assigneeAgentId: "agent-omar" })
+  const bad = [
+    ["--plugin", "Bad Plugin", "--since", SINCE],
+    ["--plugin", "sceny.devices", "--since", "yesterday"],
+  ]
+  for (const args of bad) {
+    const result = await reportSkip(home, "reason", ...args)
+    assert.equal(result.last.ok, false)
+  }
+  assert.equal(seen.length, 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+await group("a refused skip report says so, with the server's words", async () => {
+  routes[ISSUES] = { status: 403, body: { error: "Board access required" } }
+  const home = skipStateHome({ companyId: COMPANY, assigneeAgentId: "agent-omar" })
+  const result = await reportSkip(home, "reason", "--plugin", "sceny.devices", "--since", SINCE)
+  assert.equal(result.last.ok, false)
+  assert.equal(result.last.status, 403)
+  assert.ok(result.last.message.indexOf("Board access required") >= 0)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
 // --------------------------------------------------------------- the batch
 
 await group("retry all is capped, sequential, and counts both halves", async () => {

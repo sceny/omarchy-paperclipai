@@ -12,6 +12,11 @@ changes something goes through here. One reader, one writer.
     omarchy-paperclip-inbox retry     --company ID --kind run --agent ID --run ID
     omarchy-paperclip-inbox retry     --company ID --kind recovery --issue ID --action ID
     omarchy-paperclip-inbox retry-all --company ID [--limit 20] [--filter all]
+    omarchy-paperclip-inbox report-skip --plugin ID --since ISO < reason
+
+`report-skip` files one task for the plugin line when dev/follow-develop has
+skipped a plugin folder for more than a day. It takes no --company: the target
+is the owner's skip-report.json in the state directory, never this repository.
 
 Every call prints JSON on stdout and exits 0, the same contract the probe
 keeps: a refusal from the server is a normal answer with the server's own
@@ -35,6 +40,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import sys
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -44,6 +50,11 @@ RETRY_ALL_DEFAULT_LIMIT = 20
 RETRY_ALL_MAX_LIMIT = 100
 # The API never returns more than 100 rows in one page.
 FEED_PAGE = 100
+SKIP_REPORT_FILE = "skip-report.json"
+ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
+PLUGIN_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+SINCE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+REASON_LIMIT = 400
 
 
 def load_probe():
@@ -236,6 +247,53 @@ def retry_recovery(writer: Writer, issue_id: str, action_id: str) -> dict:
     }
 
 
+# ------------------------------------------------------------- the skip report
+
+
+def load_skip_target(probe):
+    """Where a skip report goes, from the owner's state dir. The ids live there, not here."""
+    data = probe.read_json_file(os.path.join(probe.state_dir(), SKIP_REPORT_FILE))
+    if not isinstance(data, dict):
+        return None
+    company = str(data.get("companyId") or "")
+    agent = str(data.get("assigneeAgentId") or "")
+    if not (ID_PATTERN.fullmatch(company) and ID_PATTERN.fullmatch(agent)):
+        return None
+    return {"companyId": company, "assigneeAgentId": agent}
+
+
+def do_report_skip(writer: Writer, target, plugin: str, since: str, reason: str) -> dict:
+    result = {"action": "report-skip", "plugin": plugin, "ok": False, "status": 0, "code": ""}
+    if target is None:
+        result["message"] = "No owner is set for skip reports on this machine."
+        return result
+    if not (PLUGIN_PATTERN.fullmatch(plugin) and SINCE_PATTERN.fullmatch(since)):
+        result["message"] = "The skip report is missing its plugin or start time."
+        return result
+    text = " ".join(reason.split())[:REASON_LIMIT] or "no reason was recorded"
+    ok, status, payload = writer.send(
+        "POST", "/api/companies/%s/issues" % urllib.parse.quote(target["companyId"], safe=""),
+        {
+            "title": "Plugin folder skipped for over 24 hours: %s" % plugin,
+            "description": (
+                "The installed copy of %s has not moved to develop since %s. "
+                "The folder was skipped for more than 24 hours without a break.\n\n"
+                "Reason: %s\n\n"
+                "Once it is back on develop with no local changes, the next pass brings it up to date."
+            ) % (plugin, since, text),
+            "assigneeAgentId": target["assigneeAgentId"],
+            "status": "todo",
+            "priority": "medium",
+        },
+    )
+    result.update(
+        ok=ok, status=status,
+        message="Filed for the plugin line" if ok else message_of(payload, "The skip report was refused."),
+        code=code_of(payload),
+    )
+    return result
+
+
 # -------------------------------------------------------------------- the batch
 
 
@@ -343,7 +401,7 @@ def do_clear_failed(writer: Writer, company: str, older_than_days: int, apply: b
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=[
-        "dismiss", "restore", "snooze", "retry", "retry-all", "clear-failed"])
+        "dismiss", "restore", "snooze", "retry", "retry-all", "clear-failed", "report-skip"])
     parser.add_argument("--company", default="", help="company id (required)")
     parser.add_argument("--item-key", default="", help="the row's dismissalKey")
     parser.add_argument("--kind", default="run", choices=["run", "recovery"])
@@ -360,6 +418,8 @@ def main(argv=None) -> int:
                         help="retry-all: which list the batch is scoped to")
     parser.add_argument("--older-than-days", type=int, default=7)
     parser.add_argument("--apply", action="store_true", help="clear-failed: actually clear")
+    parser.add_argument("--plugin", default="", help="report-skip: the plugin id")
+    parser.add_argument("--since", default="", help="report-skip: UTC time the skip began")
     parser.add_argument("--instance", default="", help="local instance id")
     parser.add_argument("--api-base", default="", help="Paperclip API base URL")
     parser.add_argument("--timeout", type=float, default=20.0)
@@ -370,6 +430,11 @@ def main(argv=None) -> int:
     instance = args.instance or probe.env("PAPERCLIP_OMARCHY_INSTANCE", "default")
     writer = Writer(probe.resolve_api_base(args.api_base, instance),
                     probe.read_token(), max(1.0, args.timeout), probe.fetch)
+
+    if args.command == "report-skip":
+        emit(do_report_skip(writer, load_skip_target(probe), args.plugin, args.since,
+                            sys.stdin.read()))
+        return 0
 
     if not args.company:
         emit({"ok": False, "action": args.command, "message": "No company id was given."})
