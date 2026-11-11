@@ -14,6 +14,14 @@ export FOLLOW_RESTART_CMD="$T/restart"
 printf '#!/bin/bash\n[[ ! -e "%s/notready" ]] || { echo "Omarchy shell did not become ready after restart." >&2; exit 1; }\n[[ ! -e "%s/locked" ]] || { echo "Refusing to restart Omarchy shell while the session is locked." >&2; exit 1; }\n[[ ! -e /proc/self/fd/9 ]] || touch "%s/leaked"\ntouch "%s/restarted"\n' "$T" "$T" "$T" "$T" >"$T/restart"; chmod +x "$T/restart"
 export FOLLOW_VALIDATE_CMD="$T/validate"
 printf '#!/bin/bash\n[[ -f "$1/ok" ]]\n' >"$T/validate"; chmod +x "$T/validate"
+export FOLLOW_REPORT_CMD=$T/report
+cat >"$T/report" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$T/reports"
+cat >>"$T/reports"; echo >>"$T/reports"
+if [[ -e "$T/report-fail" ]]; then echo '{"ok":false}'; else echo '{"ok":true}'; fi
+EOF
+chmod +x "$T/report"
 fails=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails+1)); fi; }
 run() { bash "$SCRIPT" run >"$T/out" 2>&1; echo $? >"$T/rc"; }
@@ -120,6 +128,58 @@ run
 check "second pass is idempotent (same result, still rolled back)" '[[ $(cat $T/rc) == 1 ]]'
 
 check "the restart does not inherit the pass's lock" '[[ ! -e $T/leaked ]]'
+
+# A skip spell is reported once, after 24 hours. FOLLOW_NOW sets the clock in
+# hours from B; p.spell is a clean-or-dirty checkout toggled by the timeline.
+B=1000000000
+P=$FOLLOW_PLUGINS_DIR/p.spell
+git clone -q -b develop "$T/p.two.git" "$P"
+STATE=$T/state-spell
+at() { FOLLOW_NOW=$((B + $1 * 3600)) FOLLOW_PLUGINS=p.spell FOLLOW_STATE_DIR=$STATE run; }
+reports_of() { grep -c -- "--plugin p.spell" "$T/reports"; }
+spell_since() { cut -d' ' -f2 "$STATE/skip-spells/p.spell"; }
+
+: >"$T/reports"
+echo dirty >>"$P/f"
+at 0
+check "first skip starts a spell, filed nothing yet" '[[ $(reports_of) == 0 && $(spell_since) == 0 ]] && grep -q "local changes" $T/out'
+at 23
+check "23 hours skipped: nothing is filed" '[[ $(reports_of) == 0 && $(spell_since) == 0 ]]'
+at 25
+check "25 hours skipped: filed once, with the plugin, the start and the reason" \
+  '[[ $(reports_of) == 1 && $(spell_since) == 1 ]] && grep -q -- "--since $(date -u -d "@$B" +%FT%TZ)" $T/reports && grep -q "local changes in the checkout" $T/reports && jq -e "select(.plugin==\"p.spell\" and .result==\"reported\")" $STATE/follow-develop.jsonl >/dev/null'
+at 26
+check "still the same spell an hour later: not filed again" '[[ $(reports_of) == 1 ]]'
+git -C "$P" checkout -q -- f
+at 27
+check "a clean pass ends the spell and drops its record" '[[ ! -e $STATE/skip-spells/p.spell ]] && grep -q "\"result\":\"up-to-date\"" $T/out'
+echo dirty >>"$P/f"
+at 28
+at 40
+check "a second spell counts from its own start: 12 hours in, nothing filed" '[[ $(reports_of) == 1 && $(spell_since) == 0 ]]'
+at 53
+check "second spell at 25 hours: filed again, once" '[[ $(reports_of) == 2 && $(spell_since) == 1 ]]'
+git -C "$P" checkout -q -- f
+at 54
+echo dirty >>"$P/f"
+at 55
+touch "$T/report-fail"
+at 81
+check "a failed report is logged and kept unreported" '[[ $(reports_of) == 3 && $(spell_since) == 0 ]] && grep -q report-failed $STATE/follow-develop.jsonl'
+rm -f "$T/report-fail"
+at 82
+check "the next pass files the kept report" '[[ $(reports_of) == 4 && $(spell_since) == 1 ]] && [[ $(jq -s "[.[] | select(.plugin==\"p.spell\" and .result==\"reported\")] | length" $STATE/follow-develop.jsonl) == 3 ]]'
+git -C "$P" checkout -q -- f
+
+: >"$T/reports"
+STATE=$T/state-short
+echo dirty >>"$P/f"
+at 0
+at 23
+check "a 23 hour spell files nothing" '[[ $(reports_of) == 0 && $(spell_since) == 0 ]]'
+git -C "$P" checkout -q -- f
+at 24
+check "a 23 hour spell ends clean without a report" '[[ $(reports_of) == 0 && ! -e $STATE/skip-spells/p.spell ]]'
 
 echo "failures: $fails"
 exit $((fails > 0))
