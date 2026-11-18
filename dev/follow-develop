@@ -32,6 +32,10 @@
 # symlink or a non-git copy are left alone and logged. Never leave an install
 # on a feature branch for a live check; use dev/rig.
 #
+# A folder skipped for more than a day without a break is reported once per
+# spell, as a Paperclip task for the plugin line (through the writer in
+# omarchy-paperclipai). The target is the owner's skip-report.json in the state dir.
+#
 # shellcheck shell=bash
 
 set -uo pipefail
@@ -49,6 +53,9 @@ VALIDATE_CMD=${FOLLOW_VALIDATE_CMD:-omarchy-plugin-validate}
 PING_CMD=${FOLLOW_PING_CMD:-omarchy-shell shell ping}
 RESTART_CMD=${FOLLOW_RESTART_CMD:-omarchy-restart-shell}
 PENDING=$STATE_DIR/restart-pending
+REPORT_CMD=${FOLLOW_REPORT_CMD:-$PLUGINS_DIR/sceny.paperclipai/bin/omarchy-paperclip-inbox}
+SPELL_DIR=$STATE_DIR/skip-spells
+SKIP_REPORT_AFTER=86400
 
 export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes}"
@@ -62,6 +69,39 @@ log() {
   mkdir -p "$STATE_DIR"
   printf '%s\n' "$line" >>"$LOG"
   printf '%s\n' "$line"
+  case $2 in
+    skipped) [[ $1 == - ]] || spell_seen "$1" "$3" ;;
+    up-to-date | updated | failed | rolled-back) rm -f "$SPELL_DIR/$1" ;;
+  esac
+}
+
+spell_seen() {
+  # A skip starts or continues a spell: "<since> <reported>" in one state file.
+  local id=$1 reason=$2 now since reported
+  now=${FOLLOW_NOW:-$(date +%s)}
+  mkdir -p "$SPELL_DIR"
+  if [[ -f $SPELL_DIR/$id ]]; then
+    read -r since reported <"$SPELL_DIR/$id"
+  else
+    since=$now reported=0
+    printf '%s 0\n' "$now" >"$SPELL_DIR/$id"
+  fi
+  if [[ $reported == 0 ]] && ((now - since >= SKIP_REPORT_AFTER)); then
+    report_skip "$id" "$reason" "$since" && printf '%s 1\n' "$since" >"$SPELL_DIR/$id"
+  fi
+}
+
+report_skip() {
+  # A failed report keeps the spell unreported, so the next pass tries again.
+  local id=$1 reason=$2 when out
+  when=$(date -u -d "@$3" +%FT%TZ)
+  if out=$(printf '%s' "$reason" | "$REPORT_CMD" report-skip --plugin "$id" --since "$when" 2>/dev/null) &&
+    [[ $(jq -r '.ok // false' <<<"$out" 2>/dev/null) == true ]]; then
+    log "$id" reported "skipped since $when; filed for the plugin line"
+    return 0
+  fi
+  log "$id" report-failed "could not file the skip report for the spell since $when; retried on the next pass"
+  return 1
 }
 
 follow_one() {
