@@ -5,14 +5,18 @@ match a product word fails the build.
 The examples are written for the test: no real pull request, person or device."""
 
 import base64
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -345,6 +349,9 @@ class OpenItems(unittest.TestCase):
         self.assertNotIn(OPEN, checks("> Not verified: iOS."))
         self.assertNotIn(OPEN, checks("- [ ] Not verified: iOS."))
         self.assertNotIn(OPEN, checks("- **Not verified:** iOS, no Mac here."))
+        self.assertNotIn(OPEN, checks("**Not verified**: iOS."))
+        self.assertNotIn(OPEN, checks("- **Not verified**: iOS, no Mac here."))
+        self.assertIn(OPEN, checks("**Not verified**: iOS. Not checked on Android."))
         self.assertIn(OPEN, checks("- Not checked on iOS."))
         self.assertIn(OPEN, checks("**Not verified:** iOS. Not checked on Android."))
         self.assertIn(OPEN, checks("- [ ] Not verified: iOS. Not tested on Android."))
@@ -592,9 +599,98 @@ class Sources(unittest.TestCase):
         _, _, docs = self.push(responses)
         self.assertEqual(docs, [])
 
-    def push(self, responses):
+    def push(self, responses, before="aaa", after="bbb", default_branch=None):
         with mock.patch.object(ptc, "api", self.fake_api(responses)):
-            return ptc.read_push(self.REPO, "aaa", "bbb", "token")
+            return ptc.read_push(self.REPO, before, after, "token", default_branch=default_branch)
+
+    def test_a_push_that_creates_the_branch_reads_what_it_brings_beyond_the_default_branch(self):
+        responses = {
+            "/repos/%s" % self.REPO: {"default_branch": "main"},
+            "/repos/%s/compare/main...bbb" % self.REPO: {"commits": [{"sha": "ccc", "html_url": self.COMMIT_URL, "commit": {"message": self.SQUASH}}]},
+        }
+        for default_branch in (None, "main"):
+            with self.subTest(default_branch=default_branch):
+                texts, _, _ = self.push(responses, before="0" * 40, default_branch=default_branch)
+                self.assertEqual(texts, [{"url": self.COMMIT_URL, "body": self.SQUASH, "kind": "commit"}])
+
+    def test_a_push_that_deletes_the_branch_brings_nothing(self):
+        self.assertEqual(self.push({}, after="0" * 40), ([], [], []))
+
+
+class PushRead(unittest.TestCase):
+    """A push after a busy window reads many pull requests: several at a time, with
+    the count and the time in the log, and a time limit that says it ran out."""
+    REPO = "sceny/omarchy-paperclipai"
+    WINDOW = 76
+
+    def fake_api(self, latency=0.0, seen=None):
+        merged = {n: {"number": n, "html_url": "https://github.com/%s/pull/%d" % (self.REPO, n), "title": "Clean.",
+                      "body": "Clean.", "state": "closed", "merged_at": "2026-10-23T09:00:00Z", "merge_commit_sha": "s%d" % n}
+                  for n in range(1, self.WINDOW + 1)}
+        lock, running = threading.Lock(), [0]
+
+        def api(path, token):
+            with lock:
+                running[0] += 1
+                if seen is not None:
+                    seen.append(running[0])
+            try:
+                time.sleep(latency)
+                key = path.split("?")[0]
+                if key.endswith("/compare/aaa...bbb"):
+                    return {"commits": [{"sha": pr["merge_commit_sha"], "html_url": pr["html_url"], "commit": {"message": "Clean."}}
+                                        for pr in merged.values()]}
+                found = re.search(r"/commits/s(\d+)/pulls$", key)
+                if found:
+                    return [merged[int(found.group(1))]]
+                found = re.search(r"/pulls/(\d+)$", key)
+                return merged[int(found.group(1))] if found else []
+            finally:
+                with lock:
+                    running[0] -= 1
+        return api
+
+    def test_a_busy_window_is_read_several_at_a_time_inside_its_time_limit(self):
+        # Six calls a pull request at 20 ms each: about 9 s one at a time.
+        seen = []
+        started = time.monotonic()
+        with mock.patch.object(ptc, "api", self.fake_api(0.02, seen)):
+            texts, _, docs = ptc.read_push(self.REPO, "aaa", "bbb", "token", deadline=started + 5)
+        self.assertEqual((len(texts), len(docs)), (self.WINDOW, self.WINDOW))
+        self.assertGreater(max(seen), 1)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_a_read_that_outruns_its_time_limit_stops_and_says_so(self):
+        with mock.patch.object(ptc, "api", self.fake_api(0.05)):
+            with self.assertRaises(ptc.OutOfTime) as raised:
+                ptc.read_push(self.REPO, "aaa", "bbb", "token", deadline=time.monotonic() + 0.2)
+        what, done, total = raised.exception.args
+        self.assertLess(done, total)
+
+    def run_main(self, latency, limit):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump({"before": "aaa", "after": "bbb", "repository": {"default_branch": "main"}}, handle)
+        env = {"GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": handle.name, "GITHUB_TOKEN": "token",
+               "GITHUB_REPOSITORY": self.REPO, "GITHUB_ACTIONS": "true"}
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(ptc, "api", self.fake_api(latency)), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = ptc.main(["--time-limit", str(limit)])
+        finally:
+            os.unlink(handle.name)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_log_names_the_count_and_the_time(self):
+        code, out, _ = self.run_main(0.0, 60)
+        self.assertEqual(code, 0)
+        self.assertRegex(out, r"the push brings 76 commit\(s\) and merged 76 pull request\(s\), read in [0-9.]+ s")
+
+    def test_out_of_time_is_not_a_text_failure(self):
+        code, out, err = self.run_main(0.05, 0.2)
+        self.assertEqual(code, 2)
+        self.assertIn("out of time", err)
+        self.assertNotIn("FAIL", out)
 
     def test_a_comment_on_a_pull_request_names_its_number(self):
         self.assertEqual(ptc.pull_request_number({"issue": {"number": 301, "pull_request": {"url": "x"}}}), 301)
@@ -758,6 +854,20 @@ class Workflow(unittest.TestCase):
         self.assertRegex(self.text, r"(?m)^  push:\n    branches: \[develop\]$")
         self.assertIn("github.event.issue.pull_request", self.text)
         self.assertIn("cancel-in-progress: ${{ github.event_name != 'push' }}", self.text)
+
+    def test_a_comment_run_never_shares_the_head_s_group(self):
+        group = re.search(r"(?m)^  group: (.*)$", self.text).group(1)
+        self.assertIn("github.event_name == 'issue_comment' && 'comment-'", group)
+
+    def test_the_read_s_time_limit_ends_inside_the_job_s_timeout(self):
+        for name in ("public-text.yml", "develop-notice.yml"):
+            with open(os.path.join(ROOT, ".github", "workflows", name)) as handle:
+                text = handle.read()
+            with self.subTest(workflow=name):
+                limit = float(re.search(r"public-text-check --time-limit (\d+)", text).group(1))
+                timeout = int(re.search(r"timeout-minutes: (\d+)", text).group(1)) * 60
+                # Calls already under way finish first (urlopen's 30 s), and checkout runs before.
+                self.assertLessEqual(limit + 30 + 30, timeout)
 
     def test_it_reads_with_a_read_only_token(self):
         self.assertIn("pull-requests: read", self.text)
