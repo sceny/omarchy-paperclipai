@@ -35,7 +35,9 @@ only inside it, on its own image with a throwaway Paperclip instance
    never run the rig on the host. Use the sandbox. A session is always stopped
    (`dev/sandbox dev --session <id> stop`, then `dev/sandbox verify-clean`).
 6. Never leave an install on a feature branch for a live check; the
-   `follow-develop` timer then stops following. Use the sandbox's rig.
+   `follow-develop` timer then stops following. Use the sandbox's rig. The
+   owner's install is off `develop` only on a release candidate, until that
+   release's back date (*Releasing*, 1c).
 7. Nothing private in the repository, a commit or a pull request: no tokens,
    instance ids, company or agent names, host names or inbox text. Examples and
    tests use made-up values.
@@ -228,8 +230,12 @@ in order; the detail, the checklist and the record templates are in
    candidate SHA**. The request names that SHA. A new commit on the candidate
    voids every check and any open request: they run again on the new head
    before anyone asks. Before the request the owner's machine runs that SHA
-   (folder at the SHA, shell restarted after), put there by Plugin DevOps;
-   afterwards it goes back to `develop` the same way. The owner is not asked to
+   (folder at the SHA, shell restarted after), put there by Plugin DevOps,
+   until a back date the request names (3 days after it unless the release
+   task sets another). The request says the folder is pinned and until when.
+   Plugin DevOps puts it back on `develop` the same way on the first of: the
+   go, a no, the back date, or the owner asking for `develop`'s changes; back
+   before the go, the request is void. The owner is not asked to
    install, paste or run anything (`docs/internals/releasing.md`, *The owner's
    request*).
 1d. **The owner's go, for this release.** Nothing touches `main` (a merge, a
