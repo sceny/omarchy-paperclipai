@@ -53,6 +53,7 @@ class Environment(unittest.TestCase):
         "tmp-path": "Output in /tmp/run-1/out.txt.",
         "runtime-dir": "Stills in $XDG_RUNTIME_DIR/other/.",
         "test-count-passed": "92 passed, 0 failed.",
+        "test-count-passes": "The selftest passes 47/0.",
         "test-count": "The suite ran 380 tests.",
         "test-tally": "76 pass, 0 fail.",
         "own-machine": "It works on this machine.",
@@ -163,6 +164,25 @@ class Environment(unittest.TestCase):
         ]:
             with self.subTest(text=text):
                 self.assertIn((ENV, "container"), problems(text))
+
+    def test_a_pass_count_written_as_a_verdict_fails(self):
+        for text in [
+            "the selftest passes 47/0",
+            "The cold selftest passes (17)",
+            "The selftest passes (43)",
+            "The selftest passed (43).",
+            "Still passing (9) after the rebase.",
+        ]:
+            with self.subTest(text=text):
+                self.assertIn((ENV, "test-count-passes"), problems(text))
+        for text in [
+            "It passes on Android.",
+            "The panel passes on this shell.",
+            "Passes the first step, then fails on the second.",
+            "The key passes (see the table) in order.",
+        ]:
+            with self.subTest(text=text):
+                self.assertNotIn((ENV, "test-count-passes"), problems(text))
 
     def test_a_count_of_tests_a_change_adds_is_not_a_run(self):
         for text in [

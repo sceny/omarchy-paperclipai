@@ -106,6 +106,10 @@
         "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:passed|passing)\\b|\\b(?:passed|passing)\\s+\\d+\\b|\\b\\d+\\s*/\\s*\\d+\\s+(?:tests?\\s+)?(?:passed|pass|green)\\b"
       },
       {
+        "id": "test-count-passes",
+        "regex": "\\bpass(?:es|ed|ing)?\\s+(?:\\(\\s*\\d+\\s*\\)|\\d+\\s*/\\s*\\d+\\b)"
+      },
+      {
         "id": "test-tally",
         "regex": "\\b\\d+\\s+(?:tests?\\s+)?(?:pass|fail(?:ed|ures?)?)\\b(?!-)(?!\\s+in\\s+a\\s+row\\b)(?!\\s+(?!(?:and|or|on|in|of|out|with|at|after|before|since|so|but|here|now|locally|then|again|tests?)\\b)[a-z])",
         "unless_before": "\\b(?:version|release|step|stage|phase|part|round|attempt|try|android|api|level|sdk|omarchy|qt|python|node|hyprland)\\s*$"
@@ -238,6 +242,6 @@
   },
   "public_files": {
     "files": ["CHANGELOG.md"],
-    "pattern_ids": ["task-id", "paperclip", "home-path", "dot-path", "tmp-path", "test-count-passed", "test-count", "test-tally"]
+    "pattern_ids": ["task-id", "paperclip", "home-path", "dot-path", "tmp-path", "test-count-passed", "test-count-passes", "test-count", "test-tally"]
   }
 }
