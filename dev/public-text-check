@@ -18,6 +18,8 @@ they are public in the text's source):
   dev/public-text-check --standing                     the same rules on the standing texts
   dev/public-text-check --twin                         this checker and its rules against the twin
                                                        repository's (GITHUB_TOKEN)
+  dev/public-text-check --time-limit 240               stop reading after 240 s and say so (a push after a
+                                                       busy window reads many pull requests)
 
 A failure names the text's URL, the check and the rule. The matched words follow
 only outside CI (GITHUB_ACTIONS unset) or with --show-matches: a run log is public,
@@ -32,12 +34,14 @@ open pull requests, so a change made in both lands one pull request at a time.
 
 import argparse
 import base64
+import concurrent.futures
 import fnmatch
 import glob
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -356,28 +360,65 @@ def read_pull_request(repo, number, token, commits=True):
     return {"changed_files": files, "texts": texts}
 
 
-def read_push(repo, before, after, token):
+WORKERS = 8
+NO_COMMIT = re.compile(r"^0+$")
+
+
+class OutOfTime(Exception):
+    """The time limit passed before the read was done: (what, done, total)."""
+
+
+def in_parallel(fn, items, deadline, what):
+    """[fn(item) for item in items], WORKERS calls at a time; OutOfTime once the
+    deadline (a time.monotonic() value, or None) passes before they are all done."""
+    with concurrent.futures.ThreadPoolExecutor(WORKERS) as pool:
+        futures = [pool.submit(fn, item) for item in items]
+        left = None if deadline is None else max(0.0, deadline - time.monotonic())
+        try:
+            for _ in concurrent.futures.as_completed(futures, timeout=left):
+                pass
+        except concurrent.futures.TimeoutError:
+            for future in futures:
+                future.cancel()
+            raise OutOfTime(what, sum(f.done() and not f.cancelled() for f in futures), len(futures))
+    return [future.result() for future in futures]
+
+
+def read_push(repo, before, after, token, deadline=None, default_branch=None):
     """The commit messages a push brings, the files it changes, and each pull request
     the push merged, read as a pull request is read (not its commits: those were read
     when the pull request was open). A pull request the push merged is one whose merge
     commit the push brings; an open pull request, or one merged by another push, is
-    not this push's to fail."""
+    not this push's to fail. A push that creates the branch (`before` all zeros) brings
+    what its head holds beyond the default branch; one that deletes it brings nothing.
+    The reads run WORKERS at a time and stop at the deadline (OutOfTime)."""
     base = "/repos/%s" % repo
+    if NO_COMMIT.match(after):
+        return [], [], []
+    if NO_COMMIT.match(before):
+        before = default_branch or api(base, token)["default_branch"]
     compare = api("%s/compare/%s...%s" % (base, before, after), token)
     texts = [{"url": c["html_url"], "body": c["commit"]["message"], "kind": "commit"} for c in compare["commits"]]
     files = [f["filename"] for f in compare.get("files", [])]
     shas = {c["sha"] for c in compare["commits"]}
     numbers = []
-    for sha in sorted(shas):
-        for pr in api("%s/commits/%s/pulls?per_page=100" % (base, sha), token):
+    lookups = in_parallel(lambda sha: api("%s/commits/%s/pulls?per_page=100" % (base, sha), token),
+                          sorted(shas), deadline, "commits")
+    for pulls in lookups:
+        for pr in pulls:
             if pr.get("merged_at") and pr.get("merge_commit_sha") in shas and pr["number"] not in numbers:
                 numbers.append(pr["number"])
-    docs = [read_pull_request(repo, number, token, commits=False) for number in numbers]
+    docs = in_parallel(lambda number: read_pull_request(repo, number, token, commits=False),
+                       numbers, deadline, "pull requests")
     return texts, files, docs
 
 
-def check_push(rules, repo, event, token):
-    texts, files, docs = read_push(repo, event["before"], event["after"], token)
+def check_push(rules, repo, event, token, deadline=None):
+    started = time.monotonic()
+    default_branch = (event.get("repository") or {}).get("default_branch")
+    texts, files, docs = read_push(repo, event["before"], event["after"], token, deadline, default_branch)
+    print("public-text-check: the push brings %d commit(s) and merged %d pull request(s), read in %.1f s"
+          % (len(texts), len(docs), time.monotonic() - started))
     problems = check_pull_request(rules, {"changed_files": files, "texts": texts})
     for doc in docs:
         problems += check_pull_request(rules, doc)
@@ -471,7 +512,9 @@ def main(argv=None):
     parser.add_argument("--twin", action="store_true")
     parser.add_argument("--rules", default=RULES_FILE)
     parser.add_argument("--show-matches", action="store_true")
+    parser.add_argument("--time-limit", type=float)
     args = parser.parse_args(argv)
+    deadline = None if args.time_limit is None else time.monotonic() + args.time_limit
     show_matches = args.show_matches or not os.environ.get("GITHUB_ACTIONS")
     rules = load_rules(args.rules)
     repo = args.repo or os.environ.get("GITHUB_REPOSITORY") or rules["repository"]
@@ -511,12 +554,18 @@ def main(argv=None):
             return 2
         try:
             if is_push:
-                problems = check_push(rules, repo, event, token)
+                problems = check_push(rules, repo, event, token, deadline)
             else:
                 doc = read_pull_request(repo, number, token)
                 problems = check_pull_request(rules, doc) + check_public_files(rules)
+        except OutOfTime as error:
+            what, done, total = error.args
+            print("public-text-check: out of time: the time limit of %.0f s passed with %d of %d %s read; "
+                  "the text is not checked. Run the job again." % (args.time_limit, done, total, what), file=sys.stderr)
+            return 2
         except (urllib.error.URLError, KeyError, ValueError) as error:
-            print("public-text-check: could not read the pull request: %s" % type(error).__name__, file=sys.stderr)
+            print("public-text-check: could not read the %s: %s" % ("push" if is_push else "pull request", type(error).__name__),
+                  file=sys.stderr)
             return 2
         what = "public text"
 
