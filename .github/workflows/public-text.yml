@@ -11,6 +11,9 @@ name: public-text
 # A merge_group run reads the pull request's text when the merge is asked for: a
 # review posted seconds before the merge starts its own run too late for the gate,
 # and the gate would pass on the run before it.
+# A comment run belongs to the default branch's commit, never to the pull request's
+# head, so it has a group of its own: it never cancels the head's check. The push
+# read stops at its time limit, inside the job's timeout, and says it ran out of time.
 
 on:
   pull_request:
@@ -30,7 +33,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: public-text-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  group: public-text-${{ github.event_name == 'issue_comment' && 'comment-' || '' }}${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
@@ -45,4 +48,4 @@ jobs:
       - name: Public text against the rules
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 dev/public-text-check
+        run: python3 dev/public-text-check --time-limit 240
