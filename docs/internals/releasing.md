@@ -34,14 +34,15 @@ this template. `X.Y.Z` is the version.
 
 | # | Task | Role | After | Done when |
 |---|---|---|---|---|
-| R0 | the release (holds the status page) | the plugin manager | R1 to R7 | the freeze check is clean, the release is published, the marketplace issue is filed or not needed, both trackers are closed |
+| R0 | the release (holds the status page) | the plugin manager | R1 to R8 | the freeze check is clean, the release is published, the marketplace issue is filed or not needed, both trackers are closed |
 | R1 | prepare: `dev/release-prepare X.Y.Z` (version, CHANGELOG section, branch); for urgent, the fix itself is on this pull request | Panel Engineer | | the head has the version and its CHANGELOG section (`dev/release-notes` prints it); `test` is green on the first push |
 | R2 | review with security check (the regular pull-request review) | Panel QA | R1 | PASS on the candidate SHA; for minor and patch, merged into `develop` |
 | R3 | regression in the rig, cold install, upgrade from the live tag, marketplace check by hand | Plugin DevOps runs, Panel QA gives the verdict | R2 | the regression record is PASS on the candidate SHA, with the *needs the owner's setup* list, which holds every open `needs-owner-setup` issue; the marketplace check passed on the candidate |
 | R4 | release security review: the whole plugin, plus `last-tag..candidate` | the Plugin Security Reviewer | R2 | PASS on the candidate SHA; a FAIL rejects the candidate |
-| R5 | the owner's machine on the candidate | Plugin DevOps | R3, R4 | the owner's folder is at the SHA and the shell is restarted after (*The owner's request*) |
+| R5 | the owner's machine on the candidate | Plugin DevOps | R3, R4 | the owner's folder is at the SHA and the shell is restarted after (*The owner's request*); the back date is on R0's status page |
 | R6 | the owner's go: the status page and nothing else | the chief of staff carries it to the owner | R5 | the owner said go or no for that SHA |
-| R7 | merge, tag, publish, back to `develop` (*Releasing* steps 2 and 3; the owner's machine back to `develop`) | Plugin DevOps | R6 | tag `vX.Y.Z` on a merge commit, never a squash; the release is published; `develop` is level with `main` |
+| R7 | merge, tag, publish, back to `develop` (*Releasing* steps 2 and 3) | Plugin DevOps | R6 | tag `vX.Y.Z` on a merge commit, never a squash; the release is published; `develop` is level with `main` |
+| R8 | the owner's machine back on `develop` (*The owner's request*) | Plugin DevOps | R5 | the folder is on `develop`, `follow-develop`'s next line for it reads `updated` or `up-to-date`, and `dev/loaded-code` exits 0, by the back date at the latest |
 
 On R0, the plugin manager then files or edits the marketplace issue and opens
 the `marketplace-review` tracking issue (*Releasing* step 4) and runs the
@@ -51,6 +52,11 @@ is a named step for the chief of staff, once, in this chain.
 - **The candidate is the head of R1's pull request when R2 passes.** R3 and R4
   start only then. A new commit on it voids R2 to R6: each runs again on the
   new head, and no task is created.
+- **R8 runs on the first of four events:** the owner's go, the owner's no,
+  the back date, or the owner asking for `develop`'s changes. Plugin DevOps
+  keeps it `in_progress` from R5's close with an issue monitor on the back
+  date, so the date wakes it with nobody watching. When R8 runs before the
+  go, the open request is void: a new go request waits for R5 again.
 - **R4 is always the full review.** Its kind is never decided per release.
 - **R6 is asked only when the status page reads PASS for R2, R3, R4 and R5, all
   on one SHA.**
@@ -88,7 +94,7 @@ passed. It holds nothing private beyond what the tasks already hold.
 | Cold install, upgrade from vLAST | R3 | PASS / FAIL / not yet | `<sha>` |
 | Marketplace check by hand | R3 | PASS / FAIL / not yet | `<sha>` |
 | Release security review | R4 | PASS / FAIL / not yet | `<sha>` |
-| Owner's machine on the candidate | R5 | done / not yet | `<sha>` |
+| Owner's machine on the candidate, until `<back date>` | R5 | done / not yet | `<sha>` |
 
 ## Needs the owner's setup (for the owner)
 - <item>, or *none*
@@ -484,8 +490,16 @@ rule for every release closing, not for one version.
   loaded plugin), and the panel answers over IPC: `dev/loaded-code <plugin
   folder>` exits 0 on the owner's machine. Plugin DevOps does this, never a
   command the owner pastes and runs.
-- **Back to `develop`.** After the checks, the owner's machine goes back to
-  `develop` the same way, so `dev/follow-develop` follows it again.
+- **A back date.** The folder stays on the candidate only while the request
+  is open, and never past the back date the request names: 3 days after the
+  request unless the release task sets another. The request says the folder
+  is pinned to the SHA and until when. While it is pinned, `follow-develop`
+  skips it and the owner sees none of `develop`'s changes.
+- **Back to `develop`** (R8) on the first of: the go, a no, the back date,
+  or the owner asking for `develop`'s changes. Plugin DevOps does it the same
+  way: folder, restart, `dev/loaded-code`, so `dev/follow-develop` follows it
+  again. Back on `develop` before the go, the request is void and a new one
+  waits for the folder on the candidate again.
 - **Once, with every item.** The request holds the regression record, the
   security verdict and the whole *needs the owner's setup* list. The owner
   installs and runs nothing; they only use their desktop and answer.
