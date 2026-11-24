@@ -51,6 +51,14 @@ function refreshIntervalMs(seconds, panelOpen) {
   return (panelOpen ? Math.min(seconds, REFRESH_PANEL_SEC) : seconds) * 1000
 }
 
+// The inbox filter the probe is asked for. `All` costs the server a second
+// attention query per company, and only adds rows you cleared, which never
+// toast and are only drawn in the open panel. So the closed bar reads the open
+// inbox under either filter: the count is the open inbox anyway.
+function probeInboxFilter(filter, panelOpen) {
+  return panelOpen ? normalizeInboxFilter(filter) : INBOX_NEEDS_ME
+}
+
 // A report shaped like the probe's output, for before the first poll lands.
 function emptyReport() {
   return {
@@ -1106,6 +1114,7 @@ if (typeof module !== "undefined" && module.exports) {
     REFRESH_DEFAULT_SEC: REFRESH_DEFAULT_SEC,
     REFRESH_PANEL_SEC: REFRESH_PANEL_SEC,
     refreshIntervalMs: refreshIntervalMs,
+    probeInboxFilter: probeInboxFilter,
     serviceControl: serviceControl,
     settlePending: settlePending,
     autoStartStep: autoStartStep,

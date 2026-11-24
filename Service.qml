@@ -87,6 +87,9 @@ Item {
 
   property var _seenKeys: ({})
   property var _previousReport: null
+  // A refresh asked for while the probe runs with other arguments: the panel
+  // opened during a closed bar's read. One more read follows that one.
+  property bool _refreshAgain: false
 
   // Writes run one at a time through this queue. Clearing a group of thirteen
   // is thirteen calls, and thirteen agent runs starting at once is not a thing
@@ -124,16 +127,22 @@ Item {
   }
 
   function refresh() {
-    if (statusProcess.running || pluginDir === "") return
-    refreshing = true
+    if (pluginDir === "") return
     // The closed bar only needs the counts and enough rows to colour the
     // bubble and raise notifications; the open panel needs rows to list. The
     // count is the whole feed either way, so this changes what is drawn and
     // never what is counted.
-    statusProcess.command = ["python3", statusScript, "--compact",
-                             "--items", "6",
-                             "--inbox-items", panelOpen ? "60" : "20",
-                             "--inbox-filter", inboxFilter].concat(instanceArgv())
+    var argv = ["python3", statusScript, "--compact",
+               "--items", "6",
+               "--inbox-items", panelOpen ? "60" : "20",
+               "--inbox-filter", Model.probeInboxFilter(inboxFilter, panelOpen)].concat(instanceArgv())
+    if (statusProcess.running) {
+      if (JSON.stringify(argv) !== JSON.stringify(statusProcess.command)) _refreshAgain = true
+      return
+    }
+    _refreshAgain = false
+    refreshing = true
+    statusProcess.command = argv
     statusProcess.running = true
   }
 
@@ -784,6 +793,7 @@ Item {
     stderr: StdioCollector { id: statusErr; waitForEnd: true }
     onExited: function(exitCode) {
       root.refreshing = false
+      if (root._refreshAgain) Qt.callLater(root.refresh)
       var text = String(statusOut.text || "")
       if (text === "" && exitCode !== 0) {
         root.lastError = String(statusErr.text || "The status probe failed.").split("\n")[0]
