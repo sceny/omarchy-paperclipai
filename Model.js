@@ -65,6 +65,9 @@ function emptyReport() {
     // True when a company's inbox could not be read, so the count is short of
     // the truth and the panel owes an explanation rather than a number.
     inboxStale: false,
+    // True when a company's run list could not be read: `working` and `moving`
+    // are short of the truth.
+    runsStale: false,
     companies: [],
     needs: [],
     moving: [],
@@ -789,9 +792,11 @@ function wakeNotification(report, level) {
   }
 }
 
-function keysOf(rows) {
+// Each key maps to the list it came from, so pruning can ask whether that
+// list was whole.
+function keysOf(rows, list) {
   var out = {}
-  for (var i = 0; i < (rows || []).length; i++) out[rows[i].key] = true
+  for (var i = 0; i < (rows || []).length; i++) out[rows[i].key] = list || true
   return out
 }
 
@@ -813,8 +818,8 @@ function diffNotifications(previous, next, level, seen) {
 
   // First report of the session: remember what is already waiting, say nothing.
   if (!previous) {
-    out.seen = mergeKeys(out.seen, keysOf(next.needs))
-    out.seen = mergeKeys(out.seen, keysOf(next.moving))
+    out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
+    out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
     out.seen = forgetHidden(out.seen, next)
     return out
   }
@@ -939,10 +944,27 @@ function diffNotifications(previous, next, level, seen) {
     }
   }
 
-  out.seen = mergeKeys(out.seen, keysOf(next.needs))
-  out.seen = mergeKeys(out.seen, keysOf(next.moving))
+  out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
+  out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
   out.seen = forgetHidden(pruneKeys(out.seen, next), next)
   return out
+}
+
+// Whether a report's list holds every row there is, so a key missing from it
+// means the row is gone. A stopped instance, a missing token or an inbox that
+// could not be read lists nothing, or less than there is; so does a list cut
+// to the bar's few rows while the count says more, and a list whose request
+// failed (`stale`: the probe read it as empty). Forgetting on such a report
+// toasts every row again on the next one that lists them. The count is the
+// open inbox, so the cleared rows the `All` filter lists are not set against it.
+function listsEveryRow(report, rows, count, stale) {
+  if (!report || report.reachable !== true) return false
+  if (report.authRequired === true || stale === true) return false
+  var open = 0
+  for (var i = 0; i < (rows || []).length; i++) {
+    if (rows[i].hidden !== true) open++
+  }
+  return open >= toCount(count)
 }
 
 // Text from the instance reaches `omarchy-notification-send` as a positional.
@@ -988,8 +1010,8 @@ function notificationRequest(item, appName, fallbackGlyph, exec) {
 
 function mergeKeys(seen, keys) {
   var out = {}
-  for (var a in seen) out[a] = true
-  for (var b in keys) out[b] = true
+  for (var a in seen) out[a] = seen[a]
+  for (var b in keys) out[b] = keys[b]
   return out
 }
 
@@ -1003,11 +1025,20 @@ function forgetHidden(seen, report) {
 }
 
 // Forget rows that are gone, so the same task notifies again if it comes back.
+// Only a list that holds every row can say a row is gone (`listsEveryRow`);
+// otherwise each key it does not list is kept.
 function pruneKeys(seen, report) {
-  var live = mergeKeys(keysOf(report.needs), keysOf(report.moving))
+  var needs = keysOf(report.needs)
+  var moving = keysOf(report.moving)
+  var needsWhole = listsEveryRow(report, report.needs, report.inboxTotal, report.inboxStale)
+  var movingWhole = listsEveryRow(report, report.moving, report.working, report.runsStale)
   var out = {}
   for (var key in seen) {
-    if (live[key]) out[key] = true
+    var list = seen[key]
+    var whole = list === "needs" ? needsWhole
+              : list === "moving" ? movingWhole
+              : needsWhole && movingWhole
+    if (needs[key] || moving[key] || !whole) out[key] = list
   }
   return out
 }

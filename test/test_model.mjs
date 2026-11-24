@@ -337,6 +337,108 @@ group("no notification carries a bell", () => {
   assert.equal(Model.diffNotifications(seed, busy, Model.NOTIFY_OFF, {}).notifications.length, 0)
 })
 
+group("a moment's outage replays nothing", () => {
+  const report = (fields) => Model.parseReport(JSON.stringify(fields))
+  const up = report({
+    state: "needs-you",
+    reachable: true,
+    attention: 6,
+    working: 1,
+    needs: [
+      { key: "f1", kind: "failed_run", title: "Kai run failed", isError: true },
+      { key: "d1", kind: "approval", title: "Approve the plan" },
+      { key: "d2", kind: "issue_thread_interaction", title: "Answer a question" },
+      { key: "d3", title: "Read this" },
+      { key: "d4", title: "And this" },
+      { key: "d5", title: "Last one" }
+    ],
+    moving: [{ key: "run:1", title: "Writing", agent: "Kai" }]
+  })
+  const stopped = report({ state: "stopped", reachable: false })
+  const crashed = report({ state: "probe-failed", summary: "Status probe failed" })
+
+  for (const level of [Model.NOTIFY_ALL, Model.NOTIFY_NEEDED]) {
+    for (const down of [stopped, crashed]) {
+      let seen = Model.diffNotifications(null, up, level, {}).seen
+      const gone = Model.diffNotifications(up, down, level, seen)
+      seen = gone.seen
+      if (down === stopped) {
+        assert.deepEqual(gone.notifications.map((n) => n.key),
+                         level === Model.NOTIFY_ALL ? ["instance:stopped"] : [], level)
+      }
+      const back = Model.diffNotifications(down, up, level, seen)
+      const keys = back.notifications.map((n) => n.key)
+      // Only the instance coming back, and only where that is asked for.
+      assert.deepEqual(keys, level === Model.NOTIFY_ALL ? ["instance:started"] : [],
+                       level + " after " + down.state + ": " + keys.join(", "))
+    }
+  }
+
+  // A row really gone from a report that lists everything is still forgotten,
+  // so it speaks again when it comes back.
+  let seen = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+  const fewer = report({
+    state: "needs-you", reachable: true, attention: 5, working: 0,
+    needs: up.needs.filter((r) => r.key !== "d1"), moving: []
+  })
+  seen = Model.diffNotifications(up, fewer, Model.NOTIFY_ALL, seen).seen
+  assert.ok(!seen.d1 && !seen["run:1"], "a finished row is forgotten")
+  const again = Model.diffNotifications(fewer, up, Model.NOTIFY_ALL, seen)
+  assert.deepEqual(again.notifications.map((n) => n.key).sort(), ["moving:run:1", "needs:d1"])
+
+  // A report that lists less than there is forgets nothing: a token missing,
+  // an inbox that could not be read, the bar's short list while the count says
+  // more (the panel closing), a run list cut short.
+  const partial = [
+    report({ state: "needs-auth", reachable: true, authRequired: true }),
+    report({ state: "idle", reachable: true, inboxStale: true, working: 1, moving: up.moving }),
+    report({ state: "needs-you", reachable: true, attention: 6, working: 1,
+             needs: up.needs.slice(0, 2), moving: up.moving })
+  ]
+  for (const short of partial) {
+    let kept = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+    kept = Model.diffNotifications(up, short, Model.NOTIFY_ALL, kept).seen
+    const after = Model.diffNotifications(short, up, Model.NOTIFY_ALL, kept)
+    assert.deepEqual(after.notifications.map((n) => n.key).filter((k) => k !== "instance:started"), [],
+                     short.state + " replayed rows")
+  }
+  // A list whose request failed reads as empty with a count of 0; its flag is
+  // what says it is not. Neither list forgets on it.
+  for (const failed of [
+    report({ state: "idle", reachable: true, inboxStale: true, runsStale: true }),
+    report({ state: "needs-you", reachable: true, attention: 6, working: 0, runsStale: true,
+             needs: up.needs, moving: [] })
+  ]) {
+    let kept = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+    kept = Model.diffNotifications(up, failed, Model.NOTIFY_ALL, kept).seen
+    assert.ok(kept["run:1"], "a run is kept when the run list failed")
+    if (failed.inboxStale) assert.ok(kept.d1 && kept.f1, "rows are kept when the inbox failed")
+    const after = Model.diffNotifications(failed, up, Model.NOTIFY_ALL, kept)
+    assert.deepEqual(after.notifications.map((n) => n.key), [], "a failed list replayed rows")
+  }
+  // A run list cut short keeps runs, and still forgets an inbox row that is gone.
+  let mixed = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+  mixed = Model.diffNotifications(up, report({
+    state: "needs-you", reachable: true, attention: 5, working: 3,
+    needs: up.needs.filter((r) => r.key !== "d1"), moving: []
+  }), Model.NOTIFY_ALL, mixed).seen
+  assert.ok(mixed["run:1"] && !mixed.d1)
+
+  // Under `All` the list adds cleared rows the open count leaves out, so they
+  // cannot fill a list that is cut: two open listed out of three open forgets
+  // nothing, whatever the cleared rows bring the length to.
+  const cutAll = report({
+    state: "needs-you", reachable: true, inboxFilter: "all", attention: 3, inboxTotal: 3,
+    working: 1, moving: up.moving,
+    needs: [up.needs[1], up.needs[2],
+            { key: "c1", title: "Cleared", hidden: true },
+            { key: "c2", title: "Cleared too", hidden: true }]
+  })
+  let fromAll = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+  fromAll = Model.diffNotifications(up, cutAll, Model.NOTIFY_ALL, fromAll).seen
+  assert.ok(fromAll.d3 && fromAll.f1, "an open row past a cut `All` list is kept")
+})
+
 group("the bar bubble counts what is waiting", () => {
   assert.equal(Model.badgeText(null), "")
   assert.equal(Model.badgeText({ state: "idle", attention: 0 }), "")

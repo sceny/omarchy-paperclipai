@@ -23,6 +23,11 @@ GitHub release with these notes.
   all leaves it alone. The `All` filter now adds only the rows you cleared;
   they raise no toast and are not in the bar's count. A row whose snooze ran
   out, or that moved after you cleared it, is open again and toasts once.
+- **A short outage no longer replays the inbox as toasts**: when Paperclip
+  stopped answering for one poll, the next answer raised a toast for every row
+  again. Now nothing is replayed; at `Everything` only the stop and the start
+  are announced. The same holds for a missing token, an inbox or run list the
+  instance did not send, and closing the panel.
 
 ## 0.3.0 — 2026-11-05
 

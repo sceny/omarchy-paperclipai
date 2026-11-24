@@ -661,6 +661,34 @@ await group("an inbox the probe could not read says so, instead of reading zero"
             "the panel has to be able to say why the count is short")
 })
 
+await group("a list the probe could not fetch is flagged, not read as empty", async () => {
+  routes["GET /api/health"] = { status: 200, body: { status: "ok" } }
+  routes["GET /api/companies"] = { status: 500, body: { error: "boom" } }
+  let report = await runProbe()
+  assert.equal(report.reachable, true)
+  assert.equal(report.inboxStale, true)
+  assert.equal(report.runsStale, true)
+  assert.ok(report.problems.some((p) => p.indexOf("companies") >= 0 && p.indexOf("incomplete") >= 0))
+
+  routes["GET /api/companies"] = {
+    status: 200, body: { companies: [{ id: COMPANY, name: "Sceny" }] }
+  }
+  routes["GET /api/companies/" + COMPANY + "/attention"] = {
+    status: 200, body: { totalCount: 0, countsBySourceKind: {}, items: [] }
+  }
+  routes["GET /api/companies/" + COMPANY + "/heartbeat-runs"] = { status: 500, body: { error: "boom" } }
+  report = await runProbe()
+  assert.equal(report.runsStale, true)
+  assert.equal(report.inboxStale, false)
+  assert.equal(report.working, 0)
+
+  routes["GET /api/companies/" + COMPANY + "/heartbeat-runs"] = { status: 200, body: { runs: [] } }
+  report = await runProbe()
+  assert.equal(report.runsStale, false, "an empty run list that was read is not stale")
+  const redacted = await runProbe("--redacted")
+  assert.equal(redacted.runsStale, false)
+})
+
 await group("an instance that is down is still a readable report", async () => {
   routes = {}
   const report = await runProbe()
