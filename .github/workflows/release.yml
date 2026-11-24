@@ -94,29 +94,34 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEVELOP_SYNC_KEY: ${{ secrets.DEVELOP_SYNC_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           git fetch origin develop
           if git merge-base --is-ancestor origin/develop "$GITHUB_SHA"; then
-            # develop requires a public-text status on every commit it takes;
-            # this commit is a push to main with no pull request text to read
-            gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=success -f context=public-text \
-              -f description="A push to main: no pull request text to check"
-            if [ -z "$DEVELOP_SYNC_KEY" ]; then
-              echo "::error::No DEVELOP_SYNC_KEY in environment release: develop is not brought level with main"
-              exit 1
-            fi
-            ssh_dir="$RUNNER_TEMP/develop-sync"
-            mkdir -m 700 "$ssh_dir"
-            printf '%s\n' "$DEVELOP_SYNC_KEY" > "$ssh_dir/key"
-            chmod 600 "$ssh_dir/key"
-            # github.com's host keys as GitHub publishes them over HTTPS
-            gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
-            GIT_SSH_COMMAND="ssh -l git -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
-              git push "ssh://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA:refs/heads/develop"
-            rm -rf "$ssh_dir"
+            sync="$GITHUB_SHA"
           else
-            echo "::warning::develop has commits main does not; merge main into develop by hand"
+            # a release head leaves develop with commits main does not have, and a tree main already has
+            git switch --quiet -c develop-sync origin/develop
+            git merge --no-ff --no-edit -m "Release $VERSION: develop brought level with main" "$GITHUB_SHA"
+            sync=$(git rev-parse HEAD)
           fi
+          # develop requires a public-text status on every commit it takes; the run
+          # writes the commit it pushes, so the status goes on that commit
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$sync" -f state=success -f context=public-text \
+            -f description="Written by the release run: no pull request text to check"
+          if [ -z "$DEVELOP_SYNC_KEY" ]; then
+            echo "::error::No DEVELOP_SYNC_KEY in environment release: develop is not brought level with main"
+            exit 1
+          fi
+          ssh_dir="$RUNNER_TEMP/develop-sync"
+          mkdir -m 700 "$ssh_dir"
+          printf '%s\n' "$DEVELOP_SYNC_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # github.com's host keys as GitHub publishes them over HTTPS
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
+          GIT_SSH_COMMAND="ssh -l git -i $ssh_dir/key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_dir/known_hosts" \
+            git push "ssh://github.com/$GITHUB_REPOSITORY.git" "$sync:refs/heads/develop"
+          rm -rf "$ssh_dir"
 
       - name: The release arrived as a merge commit
         if: steps.version.outputs.tagged == 'false' && !cancelled()

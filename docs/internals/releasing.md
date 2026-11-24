@@ -28,7 +28,7 @@ this template. `X.Y.Z` is the version.
 
 | Kind | When | Branch | Pull request into |
 |---|---|---|---|
-| **minor** | a new feature on `develop` | `release-X.Y.Z` from `develop` | `develop`, then `develop` into `main` |
+| **minor** | a new feature on `develop` | `release-X.Y.Z` from `develop` | the release head (below) into `main` |
 | **patch** | fixes only on `develop` | the same as minor | the same as minor |
 | **urgent** | a fix users need now, or a maintainer's finding on the marketplace issue; only after the owner's go for it | `fix-X.Y.Z` from `main` | `main`, then `main` into `develop` |
 
@@ -138,6 +138,35 @@ The release pull request into `main` is merged with a merge commit. The ruleset
 on `main` allows that method only, so GitHub refuses a squash or a rebase before
 the merge. The `release` run on `main` checks it again after tagging, as a
 second check: a single-parent commit fails there.
+
+## The release head: `dev/release-head`
+
+A pull request into `main` reads every commit it brings. From `develop`, that is
+every commit `develop` has and `main` does not, so a commit already public on
+`develop` is read again on each release, and one whose text a later check
+rejects blocks the release. The release head avoids that: one commit on `main`
+whose tree is the candidate's, and whose message is written for it.
+
+```bash
+dev/release-head 0.3.0    # release-head-0.3.0: parent origin/main, tree of origin/develop
+git push -u origin release-head-0.3.0
+gh pr create --base main --head release-head-0.3.0 --title "Release 0.3.0"
+git rev-parse release-head-0.3.0^{tree}    # must equal the next line
+git rev-parse origin/develop^{tree}
+```
+
+- It refuses a `manifest.json` on `origin/develop` whose version is not `X.Y.Z`,
+  a `CHANGELOG.md` there with no section for it, a version already tagged here
+  or on origin, and a branch that exists. It does not touch the working tree.
+- The tree equality is checked before the merge. A different tree means
+  `develop` moved after the script ran: run `dev/release-head` again, on the new
+  head, and the checks of the candidate run on the new SHA.
+- The merge is the one into `main` in *Releasing* step 2. The `release` run then
+  merges `main` into `develop` with a merge commit, because a release head leaves
+  `develop` with commits `main` does not have. Once the run is done,
+  `git merge-base --is-ancestor origin/main origin/develop` exits 0.
+- Tested in `test/test_release_head.py`, which builds the case in a throwaway
+  repository: the commit that fails on `develop` passes on the release head.
 
 ## Every pull request
 
@@ -268,10 +297,10 @@ through the API, so a plain comment is read on the next run of any event.
   (`dev/public-text-check --standing`).
 - `public-text` is a required status check on `develop`, behind two gates that
   both hold admins too: branch protection (`enforce_admins` on) and the
-  repository ruleset `develop requires public-text` (no bypass actor). A direct
-  push to `develop` is refused, so the `release` workflow posts a `public-text`
-  success status on the `main` commit it brings `develop` level with (a push to
-  `main` has no pull request text).
+  repository ruleset `develop requires public-text` (its only bypass actor is the
+  deploy key that the `release` run pushes with). A direct push to `develop` is
+  refused, so the `release` workflow posts a `public-text` success status on the
+  commit it pushes to `develop` (a push to `main` has no pull request text).
 - The checker is the same file as in `sceny/omarchy-devices`, and the rules
   differ only in each repository's own lines (`LOCAL_RULES` in the checker:
   the repository's name, the `paperclip` pattern, the plugin id in the path
