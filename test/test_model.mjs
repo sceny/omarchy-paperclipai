@@ -659,6 +659,27 @@ group("a cleared row the All filter lists is not counted as open", () => {
   assert.equal(Model.moreWaiting({ inboxTotal: 5 }, Model.openListed(groups), ""), 3)
 })
 
+group("the snooze-over count at Everything leaves out what you snoozed or cleared", () => {
+  // Under `All` the probe takes its total from the open inbox, so the cleared
+  // rows it lists are not in it, and a cut list does not change it.
+  const listed = {
+    inboxFilter: Model.INBOX_ALL, inboxTotal: 1, inboxShown: 3, attention: 1,
+    needs: [
+      { key: "a", kind: "approval", hidden: false },
+      { key: "b", kind: "failed_run", hidden: true },
+      { key: "c", kind: "issue_thread_interaction", hidden: true }
+    ]
+  }
+  assert.equal(Model.wakeNotification(listed, Model.NOTIFY_ALL).body, "1 thing needs you.")
+  // Nothing open: nothing to say, whatever the list holds.
+  assert.equal(Model.wakeNotification({ ...listed, inboxTotal: 0, attention: 0 }, Model.NOTIFY_ALL), null)
+  const cut = { ...listed, inboxTotal: 9, attention: 9 }
+  assert.equal(Model.wakeNotification(cut, Model.NOTIFY_ALL).body, "9 things need you.")
+  // The same count under `Needs-me`.
+  assert.equal(Model.wakeNotification({ ...cut, inboxFilter: Model.INBOX_NEEDS_ME }, Model.NOTIFY_ALL).body,
+    "9 things need you.")
+})
+
 group("text from the instance is inert in a notification", () => {
   const WJ = "\u2060"
   for (const hostile of ["--app-name=x", "-u", "--image=/x", "--exec", "-r", "  --replace-id=4"]) {

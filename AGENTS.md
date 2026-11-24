@@ -142,7 +142,7 @@ in order; the detail, the checklist and the record templates are in
 - **Every release runs the same chain**, created together at the start
   (`docs/internals/releasing.md`, *The release template*). Three kinds: a
   **minor** (a new feature) and a **patch** (fixes only) are a `release-X.Y.Z`
-  branch from `develop`, into `develop` and then `develop` into `main`; an
+  branch from `develop`, into `develop`, then the release head into `main`; an
   **urgent** fix (needed by users now, or a maintainer's finding) is a
   `fix-X.Y.Z` branch from `main`, into `main` and then `main` into `develop`,
   only after the owner's go. The chain: prepare (`dev/release-prepare`), the
@@ -242,27 +242,31 @@ in order; the detail, the checklist and the record templates are in
    tag, a release) and nothing is filed on or edited in the Omarchy marketplace
    before the owner has said go for this release, after 1c. A go for one
    release is not a go for the next; an urgent fix for users needs its own.
-2. **Merge `develop` into `main`** through a pull request titled
-   *Release X.Y.Z* (`gh pr create --base main --head develop`), CI green,
-   merged with a merge commit, never squashed, so both branches keep one
-   history (a single-parent commit on `main` fails the `release` run after it
+2. **Merge the release head into `main`.** `dev/release-head X.Y.Z` makes
+   `release-head-X.Y.Z`: one commit on `origin/main` whose tree is
+   `origin/develop`'s (*The release head* in `docs/internals/releasing.md`).
+   Push it and open a pull request titled *Release X.Y.Z* into `main`
+   (`gh pr create --base main --head release-head-X.Y.Z`). Its tree equals the
+   candidate's before the merge, CI green, merged with a merge commit, never
+   squashed (a single-parent commit on `main` fails the `release` run after it
    tags). The `check` job of the `release` workflow fails while the version in
    `manifest.json` is already tagged or has no CHANGELOG section with entries.
    The `marketplace-check` job runs the marketplace's own validation and
    security baseline on the same head and fails where its bots would
    (`docs/internals/releasing.md`).
 3. **The `release` workflow tags and publishes** when the merge lands on
-   `main`: it tags the merge commit `vX.Y.Z`, publishes the release with that
-   CHANGELOG section as its notes, and brings `develop` level with `main`.
-   Its publish job waits in environment `release` for the owner's approval,
-   given only after the go is on the release status page.
+   `main`: it tags the merge commit `vX.Y.Z` and publishes the release with
+   that CHANGELOG section as its notes. It brings `develop` level with `main`:
+   a fast-forward, or after a release head a merge commit of `main` into
+   `develop` that the run makes and pushes. Its publish job waits in
+   environment `release` for the owner's approval, given only after the go is
+   on the release status page.
    Check it ran (`gh run list --workflow release --limit 1`,
    `gh release view vX.Y.Z`). If it failed, do what it does by hand:
 
    ```bash
    git tag -a vX.Y.Z -m "Paperclip X.Y.Z" origin/main && git push origin vX.Y.Z
    gh release create vX.Y.Z --title "Paperclip X.Y.Z" --notes-file notes.md --verify-tag --latest
-   git fetch origin && git switch develop && git merge --ff-only origin/main && git push
    ```
 
 4. **Request the marketplace review** (`omacom/omarchy-plugin-marketplace`)
