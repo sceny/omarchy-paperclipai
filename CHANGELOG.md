@@ -24,6 +24,11 @@ GitHub release with these notes.
 - **"Snooze is over" at `Everything` no longer counts rows you snoozed or
   cleared** while the `All` inbox filter lists them. When the list is cut, it
   says "or more".
+- **A short outage no longer replays the inbox as toasts**: when Paperclip
+  stopped answering for one poll, the next answer raised a toast for every row
+  again. Now nothing is replayed; at `Everything` only the stop and the start
+  are announced. The same holds for a missing token, an inbox or run list the
+  instance did not send, and closing the panel.
 
 ## 0.3.0 — 2026-11-05
 

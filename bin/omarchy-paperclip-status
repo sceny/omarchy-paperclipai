@@ -589,9 +589,16 @@ def company_needs(api: Api, company: dict, keep: int, now: float, inbox_filter: 
 
 
 def company_moving(api: Api, company: dict, limit: int, now: float):
-    """Live runs, named by the agent and the task they are working on."""
+    """Live runs, named by the agent and the task they are working on.
+
+    `working` is None when the run list could not be read: a failed call is
+    not "nothing is running", and the widget forgets runs it was told are gone.
+    """
     cid = company.get("id")
-    runs = as_list(api.get("/api/companies/%s/heartbeat-runs?limit=40" % cid), "runs")
+    payload = api.get("/api/companies/%s/heartbeat-runs?limit=40" % cid)
+    if payload is None:
+        return None, [], 0
+    runs = as_list(payload, "runs")
     live = [r for r in runs if isinstance(r, dict) and str(r.get("status")) in LIVE_RUN_STATES]
     failed = sum(1 for r in runs if isinstance(r, dict) and str(r.get("status")) == "failed")
     if not live:
@@ -667,6 +674,7 @@ def redact(report: dict) -> dict:
         "inboxCounts": {safe_token(k): v for k, v in report["inboxCounts"].items() if safe_token(k)},
         "retryableCount": report["retryableCount"],
         "inboxStale": report["inboxStale"],
+        "runsStale": report["runsStale"],
         "companies": [
             {"id": c["id"], "prefix": safe_token(c["prefix"]), "attention": c["attention"], "working": c["working"]}
             for c in report["companies"]
@@ -792,6 +800,7 @@ def probe(args: argparse.Namespace) -> int:
         "inboxCounts": {},
         "retryableCount": 0,
         "inboxStale": False,
+        "runsStale": False,
         "companies": [],
         "needs": [],
         "moving": [],
@@ -819,7 +828,17 @@ def probe(args: argparse.Namespace) -> int:
         report["problems"].append(api.last_error)
 
     if report["reachable"]:
-        companies = as_list(api.get("/api/companies"), "companies")
+        payload = api.get("/api/companies")
+        if payload is None:
+            # The instance answered its health check, then not this. An empty
+            # list here would read as "nothing waits, nothing runs", and the
+            # widget would forget every row it had already announced.
+            report["problems"].append(
+                "Could not read the companies (%s), so the count is incomplete"
+                % (api.last_error or "no answer"))
+            report["inboxStale"] = True
+            report["runsStale"] = True
+        companies = as_list(payload, "companies")
         for company in companies[:MAX_COMPANIES]:
             # The id goes into URL paths below, and a redacted report prints it.
             if not isinstance(company, dict) or not safe_token(company.get("id")):
@@ -833,6 +852,9 @@ def probe(args: argparse.Namespace) -> int:
                 report["inboxStale"] = True
                 attention = 0
             working, moving, failed = company_moving(api, company, items, now)
+            if working is None:
+                report["runsStale"] = True
+                working = 0
             report["attention"] += attention
             report["working"] += working
             report["failedRuns"] += failed
