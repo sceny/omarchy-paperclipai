@@ -142,8 +142,7 @@ in order; the detail, the checklist and the record templates are in
 - **Every release runs the same chain**, created together at the start
   (`docs/internals/releasing.md`, *The release template*). Three kinds: a
   **minor** (a new feature) and a **patch** (fixes only) are a `release-X.Y.Z`
-  branch from `develop`, into `develop`, then the release head into `main`
-  and `main` into `develop`; an
+  branch from `develop`, into `develop`, then the release head into `main`; an
   **urgent** fix (needed by users now, or a maintainer's finding) is a
   `fix-X.Y.Z` branch from `main`, into `main` and then `main` into `develop`,
   only after the owner's go. The chain: prepare (`dev/release-prepare`), the
@@ -257,10 +256,11 @@ in order; the detail, the checklist and the record templates are in
    (`docs/internals/releasing.md`).
 3. **The `release` workflow tags and publishes** when the merge lands on
    `main`: it tags the merge commit `vX.Y.Z` and publishes the release with
-   that CHANGELOG section as its notes. It brings `develop` level only by a
-   fast-forward, which a release head never allows: the run warns, and step
-   3b does it. Its publish job waits in environment `release` for the owner's
-   approval, given only after the go is on the release status page.
+   that CHANGELOG section as its notes. It brings `develop` level with `main`:
+   a fast-forward, or after a release head a merge commit of `main` into
+   `develop` that the run makes and pushes. Its publish job waits in
+   environment `release` for the owner's approval, given only after the go is
+   on the release status page.
    Check it ran (`gh run list --workflow release --limit 1`,
    `gh release view vX.Y.Z`). If it failed, do what it does by hand:
 
@@ -268,13 +268,6 @@ in order; the detail, the checklist and the record templates are in
    git tag -a vX.Y.Z -m "Paperclip X.Y.Z" origin/main && git push origin vX.Y.Z
    gh release create vX.Y.Z --title "Paperclip X.Y.Z" --notes-file notes.md --verify-tag --latest
    ```
-
-3b. **Bring `develop` level with `main`** through a pull request from `main`
-   into `develop` (`gh pr create --base develop --head main`), its checks
-   green, merged with a merge commit, never squashed, through develop's merge
-   queue. Its range is the release head and the merge commit, which
-   `public-text` reads as written. Check it:
-   `git merge-base --is-ancestor origin/main origin/develop` exits 0.
 
 4. **Request the marketplace review** (`omacom/omarchy-plugin-marketplace`)
    once the release is published and the owner has said go for the request
