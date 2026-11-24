@@ -15,7 +15,9 @@ GitHub release with these notes.
   the server for every company's inbox, which is heavy on a busy instance.
   The new default applies only where *Refresh interval* was never set; an
   interval you chose is kept. An action you take still refreshes the panel
-  right after it.
+  right after it. With the panel closed, the `All` filter reads only the open
+  inbox, one query per company: the rows you cleared are fetched when the
+  panel opens.
 - **Desktop notifications at `Needs-me` are for pending decisions only**: an
   approval, a question or confirmation an agent asked, a join request. Reviews,
   blockers, budget alerts, failed runs and the instance stopping no longer

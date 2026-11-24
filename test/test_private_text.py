@@ -50,6 +50,7 @@ ALLOWED = {
     # Fixed choices.
     ("Service.qml", 'panelOpen ? "60" : "20"'): "two literals",
     ("Service.qml", "inboxFilter"): "a plugin enum (needs-me / all), normalised by Model.inboxFilterSetting",
+    ("Service.qml", "Model.probeInboxFilter(inboxFilter, panelOpen)"): "a plugin enum (needs-me / all), normalised by Model.normalizeInboxFilter",
     ("Service.qml", 'quiet.bypass ? "omarchy-action" : "Paperclip"'): "two literals",
     ("Service.qml", 'String(item.urgency || "normal")'): "Model.js sets urgency to low / normal / critical",
     ("Service.qml", 'String(item.glyph || Model.stateGlyph(root.instanceState))'): "an icon glyph from Model.js",

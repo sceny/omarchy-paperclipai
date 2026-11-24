@@ -962,6 +962,20 @@ group("auto-start step", () => {
   assert.equal(Model.autoStartStep(false, { state: "needs-you", reachable: true }, true, false).action, "")
 })
 
+group("the closed bar reads the open inbox under either filter, the open panel the filter it shows", () => {
+  // `All` is a second attention query per company, for rows that only the
+  // open panel draws; the closed bar pays one query per company per read.
+  assert.equal(Model.probeInboxFilter(Model.INBOX_ALL, false), Model.INBOX_NEEDS_ME)
+  assert.equal(Model.probeInboxFilter(Model.INBOX_NEEDS_ME, false), Model.INBOX_NEEDS_ME)
+  assert.equal(Model.probeInboxFilter(Model.INBOX_ALL, true), Model.INBOX_ALL)
+  assert.equal(Model.probeInboxFilter(Model.INBOX_NEEDS_ME, true), Model.INBOX_NEEDS_ME)
+  assert.equal(Model.probeInboxFilter("All", true), Model.INBOX_ALL)
+  assert.equal(Model.probeInboxFilter("nonsense", true), Model.INBOX_NEEDS_ME)
+  // The widget asks the probe for exactly this, not for the setting itself.
+  const service = readFileSync(path.join(root, "Service.qml"), "utf8")
+  assert.ok(service.includes('"--inbox-filter", Model.probeInboxFilter(inboxFilter, panelOpen)'))
+})
+
 group("the bar reads once a minute, the open panel at least every 20 seconds", () => {
   assert.equal(Model.REFRESH_DEFAULT_SEC, 60)
   assert.equal(Model.refreshIntervalMs(Model.REFRESH_DEFAULT_SEC, false), 60000)

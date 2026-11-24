@@ -597,6 +597,9 @@ await group("a row snoozed in Paperclip is not listed or counted, under either f
 
   const needsMe = await runProbe()
   assert.ok(seen.every((r) => r.url.indexOf("includeDismissed") < 0), "the open inbox asks for the open inbox")
+  // One attention query per company: the closed bar asks for this filter
+  // under either setting (Model.probeInboxFilter).
+  assert.equal(seen.filter((r) => r.url.indexOf("/attention") > 0).length, 1)
   assert.equal(needsMe.inboxFilter, "needs-me")
   assert.deepEqual(needsMe.needs.map((r) => r.title), ["Open one"])
 
