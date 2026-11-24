@@ -424,6 +424,20 @@ group("a moment's outage replays nothing", () => {
     needs: up.needs.filter((r) => r.key !== "d1"), moving: []
   }), Model.NOTIFY_ALL, mixed).seen
   assert.ok(mixed["run:1"] && !mixed.d1)
+
+  // Under `All` the list adds cleared rows the open count leaves out, so they
+  // cannot fill a list that is cut: two open listed out of three open forgets
+  // nothing, whatever the cleared rows bring the length to.
+  const cutAll = report({
+    state: "needs-you", reachable: true, inboxFilter: "all", attention: 3, inboxTotal: 3,
+    working: 1, moving: up.moving,
+    needs: [up.needs[1], up.needs[2],
+            { key: "c1", title: "Cleared", hidden: true },
+            { key: "c2", title: "Cleared too", hidden: true }]
+  })
+  let fromAll = Model.diffNotifications(null, up, Model.NOTIFY_ALL, {}).seen
+  fromAll = Model.diffNotifications(up, cutAll, Model.NOTIFY_ALL, fromAll).seen
+  assert.ok(fromAll.d3 && fromAll.f1, "an open row past a cut `All` list is kept")
 })
 
 group("the bar bubble counts what is waiting", () => {
@@ -692,33 +706,32 @@ group("a snooze that ends says so once, and never replays the backlog", () => {
   assert.equal(Model.wakeNotification(null, Model.NOTIFY_NEEDED), null)
 })
 
-group("a snoozed or cleared row never toasts, and toasts once when it comes back", () => {
+group("a cleared row never toasts, and toasts once when it comes back", () => {
   const quiet = Model.parseReport(JSON.stringify({
     state: "idle", reachable: true, needs: [], moving: []
   }))
-  // The All inbox filter lists what you snoozed or cleared, so it can be found.
+  // The All inbox filter lists what you cleared, so it can be found. A row
+  // snoozed in Paperclip never reaches the report (the probe drops it).
   const listed = Model.parseReport(JSON.stringify({
     state: "needs-you", reachable: true, inboxFilter: "all",
     needs: [
-      { key: "a1", kind: "approval", title: "Approve the hire",
-        hidden: true, snoozedUntil: "2026-01-02T09:00:00Z" },
+      { key: "a1", kind: "approval", title: "Approve the hire", hidden: true },
       { key: "d1", kind: "decision", title: "Pick one", hidden: true },
-      { key: "f1", kind: "failed_run", title: "Kai run failed", isError: true,
-        hidden: true, snoozedUntil: "2026-01-02T09:00:00Z" }
+      { key: "f1", kind: "failed_run", title: "Kai run failed", isError: true, hidden: true }
     ]
   }))
   for (const level of [Model.NOTIFY_NEEDED, Model.NOTIFY_ALL]) {
     const out = Model.diffNotifications(quiet, listed, level, {})
-    assert.equal(out.notifications.length, 0, level + ": nothing snoozed speaks")
+    assert.equal(out.notifications.length, 0, level + ": nothing cleared speaks")
     assert.ok(!out.seen.a1 && !out.seen.d1 && !out.seen.f1, level + ": hidden rows stay unseen")
   }
   // Not on the first report of the session either.
   const first = Model.diffNotifications(null, listed, Model.NOTIFY_NEEDED, {})
   assert.ok(!first.seen.a1, "a hidden row is not remembered as seen at start")
-  // Even a row seen before it was snoozed is forgotten while hidden.
+  // Even a row seen before it was cleared is forgotten while hidden.
   const before = Model.diffNotifications(listed, listed, Model.NOTIFY_NEEDED, { a1: true })
   assert.ok(!before.seen.a1)
-  // The snooze ends: the row is open again, and that is one toast.
+  // New activity on it: the row is open again, and that is one toast.
   const back = Model.parseReport(JSON.stringify({
     state: "needs-you", reachable: true, inboxFilter: "all",
     needs: [{ key: "a1", kind: "approval", title: "Approve the hire" }]
@@ -726,24 +739,34 @@ group("a snoozed or cleared row never toasts, and toasts once when it comes back
   assert.deepEqual(Model.diffNotifications(listed, back, Model.NOTIFY_NEEDED, before.seen)
     .notifications.map((n) => n.key), ["needs:a1"])
 
-  // The wake toast under the All filter counts only the open rows listed: the
-  // server's counts there take in the snoozed and cleared ones too.
-  const waking = { inboxFilter: "all", inboxTotal: 3, inboxShown: 3,
-    inboxCounts: { approval: 2, decision: 1 },
-    needs: [{ key: "a1", kind: "approval" },
-            { key: "a2", kind: "approval", hidden: true },
-            { key: "d1", kind: "decision", hidden: true }] }
+  // The wake toast reads the server's counts, which are the open inbox under
+  // either filter: what you snoozed or cleared is not in them.
+  const waking = { inboxFilter: "all", inboxTotal: 1, inboxCounts: { approval: 1 },
+    needs: [{ key: "a1", kind: "approval" }, { key: "d1", kind: "decision", hidden: true }] }
   assert.equal(Model.wakeNotification(waking, Model.NOTIFY_NEEDED).body, "1 decision waits for you.")
-  assert.equal(Model.wakeNotification({ ...waking, inboxTotal: 9 }, Model.NOTIFY_NEEDED).body,
-    "1 or more decisions wait for you.", "a cut list says so")
-  assert.equal(Model.wakeNotification({ ...waking, needs: waking.needs.slice(1) },
-    Model.NOTIFY_NEEDED), null, "only snoozed decisions: nothing to say")
+  assert.equal(Model.wakeNotification({ ...waking, inboxTotal: 0, inboxCounts: {} },
+    Model.NOTIFY_NEEDED), null, "nothing open: nothing to say")
+})
+
+group("a cleared row the All filter lists is not counted as open", () => {
+  const groups = Model.groupRows([
+    { key: "a", kind: "review", title: "One" },
+    { key: "b", kind: "review", title: "One", hidden: true },
+    { key: "c", kind: "approval", title: "Two", hidden: true },
+    { key: "d", kind: "approval", title: "Three" }
+  ])
+  assert.equal(Model.openListed(groups), 2)
+  assert.equal(Model.openListed([]), 0)
+  assert.equal(Model.openListed(null), 0)
+  // Against the open count: two open listed out of five open is three more.
+  assert.equal(Model.moreWaiting({ inboxTotal: 5 }, Model.openListed(groups), ""), 3)
 })
 
 group("the snooze-over count at Everything leaves out what you snoozed or cleared", () => {
-  // Under `All` the server's total counts hidden rows too; they are not news.
+  // Under `All` the probe takes its total from the open inbox, so the cleared
+  // rows it lists are not in it, and a cut list does not change it.
   const listed = {
-    inboxFilter: Model.INBOX_ALL, inboxTotal: 3, inboxShown: 3, attention: 3,
+    inboxFilter: Model.INBOX_ALL, inboxTotal: 1, inboxShown: 3, attention: 1,
     needs: [
       { key: "a", kind: "approval", hidden: false },
       { key: "b", kind: "failed_run", hidden: true },
@@ -751,15 +774,11 @@ group("the snooze-over count at Everything leaves out what you snoozed or cleare
     ]
   }
   assert.equal(Model.wakeNotification(listed, Model.NOTIFY_ALL).body, "1 thing needs you.")
-  // Every listed row hidden: nothing to say.
-  const allHidden = { ...listed, needs: listed.needs.map((r) => ({ ...r, hidden: true })) }
-  assert.equal(Model.wakeNotification(allHidden, Model.NOTIFY_ALL), null)
-  // A cut list cannot know what lies past it, so it says "or more".
-  const cut = { ...listed, inboxTotal: 9 }
-  assert.equal(Model.wakeNotification(cut, Model.NOTIFY_ALL).body, "1 or more things need you.")
-  const cutTwo = { ...cut, needs: listed.needs.map((r) => ({ ...r, hidden: false })) }
-  assert.equal(Model.wakeNotification(cutTwo, Model.NOTIFY_ALL).body, "3 or more things need you.")
-  // Under `Needs-me` the server already leaves hidden rows out of its total.
+  // Nothing open: nothing to say, whatever the list holds.
+  assert.equal(Model.wakeNotification({ ...listed, inboxTotal: 0, attention: 0 }, Model.NOTIFY_ALL), null)
+  const cut = { ...listed, inboxTotal: 9, attention: 9 }
+  assert.equal(Model.wakeNotification(cut, Model.NOTIFY_ALL).body, "9 things need you.")
+  // The same count under `Needs-me`.
   assert.equal(Model.wakeNotification({ ...cut, inboxFilter: Model.INBOX_NEEDS_ME }, Model.NOTIFY_ALL).body,
     "9 things need you.")
 })

@@ -236,6 +236,19 @@ function groupRows(rows) {
   return out
 }
 
+// How many open rows a grouped list holds. A row you cleared, listed under
+// the `All` filter, is not open and is not in the count it is set against.
+function openListed(groups) {
+  var total = 0
+  for (var i = 0; i < (groups || []).length; i++) {
+    var members = groups[i].members || [groups[i]]
+    for (var j = 0; j < members.length; j++) {
+      if (members[j].hidden !== true) total++
+    }
+  }
+  return total
+}
+
 // How many open rows the panel's list does not reach. Named rather than
 // hidden, so a cut-off list never pretends to be the whole inbox.
 function moreWaiting(report, listed, filter) {
@@ -759,50 +772,32 @@ function quietState(snooze, omarchyDnd, now) {
   return base
 }
 
-// Under the `All` filter the server's counts take in what you snoozed or
-// cleared. Count the listed rows still open instead; a cut list says so.
-function openListed(report, keep) {
-  var rows = Array.isArray(report.needs) ? report.needs : []
-  var count = 0
-  for (var i = 0; i < rows.length; i++) {
-    if (rows[i].hidden !== true && keep(rows[i])) count++
-  }
-  return { count: count, more: toCount(report.inboxShown) < toCount(report.inboxTotal) }
-}
-
 // Said once when a timed snooze runs out by itself and rows are waiting. The
 // backlog is never replayed: one line, one click, then the panel is the list.
 // `Needs-me` counts only the decisions, the same rows it would have toasted.
 function wakeNotification(report, level) {
   var mode = normalizeNotifyLevel(level)
   if (mode === NOTIFY_OFF || !report) return null
-  var listed = report.inboxFilter === INBOX_ALL
   if (mode === NOTIFY_NEEDED) {
-    var decisions = listed
-      ? openListed(report, function (row) { return isDecisionKind(row.kind) })
-      : { count: decisionCount(report), more: false }
-    if (decisions.count === 0) return null
+    var decisions = decisionCount(report)
+    if (decisions === 0) return null
     return {
       key: "snooze:over",
       urgency: "normal",
       glyph: GLYPH_PAPERCLIP,
       summary: "Snooze is over",
-      body: decisions.count === 1 && !decisions.more ? "1 decision waits for you."
-          : decisions.count + (decisions.more ? " or more" : "") + " decisions wait for you.",
+      body: decisions === 1 ? "1 decision waits for you." : decisions + " decisions wait for you.",
       action: "open"
     }
   }
-  var total = listed
-    ? openListed(report, function () { return true })
-    : { count: toCount(report.inboxTotal) || toCount(report.attention), more: false }
-  if (total.count === 0) return null
+  var total = toCount(report.inboxTotal) || toCount(report.attention)
+  if (total === 0) return null
   return {
     key: "snooze:over",
     urgency: "normal",
     glyph: GLYPH_PAPERCLIP,
     summary: "Snooze is over",
-    body: total.count === 1 && !total.more ? "1 thing needs you."
-        : total.count + (total.more ? " or more" : "") + " things need you.",
+    body: total === 1 ? "1 thing needs you." : total + " things need you.",
     action: "open"
   }
 }
@@ -881,9 +876,9 @@ function diffNotifications(previous, next, level, seen) {
   // moving to `Everything` later does not replay it.
   var freshErrors = []
   var freshDecisions = []
-  // A row you snoozed or cleared is not shown, whatever the level. The `All`
-  // inbox filter lists it so it can be found, never so it can toast; it stays
-  // unseen, so a snooze that ends is one toast, the way the reminder it is.
+  // A row you cleared is not shown, whatever the level. The `All` inbox filter
+  // lists it so it can be found, never so it can toast; it stays unseen, so a
+  // row that comes back is one toast. A snoozed row is never in the report.
   for (var i = 0; i < next.needs.length; i++) {
     var row = next.needs[i]
     if (row.hidden === true || out.seen[row.key]) continue
@@ -970,11 +965,16 @@ function diffNotifications(previous, next, level, seen) {
 // could not be read lists nothing, or less than there is; so does a list cut
 // to the bar's few rows while the count says more, and a list whose request
 // failed (`stale`: the probe read it as empty). Forgetting on such a report
-// toasts every row again on the next one that lists them.
+// toasts every row again on the next one that lists them. The count is the
+// open inbox, so the cleared rows the `All` filter lists are not set against it.
 function listsEveryRow(report, rows, count, stale) {
   if (!report || report.reachable !== true) return false
   if (report.authRequired === true || stale === true) return false
-  return (rows || []).length >= toCount(count)
+  var open = 0
+  for (var i = 0; i < (rows || []).length; i++) {
+    if (rows[i].hidden !== true) open++
+  }
+  return open >= toCount(count)
 }
 
 // Text from the instance reaches `omarchy-notification-send` as a positional.
@@ -1025,8 +1025,8 @@ function mergeKeys(seen, keys) {
   return out
 }
 
-// A snoozed or cleared row is never counted as seen: when it comes back it is
-// news again, under either inbox filter.
+// A cleared row is never counted as seen: when it comes back it is news
+// again, under either inbox filter.
 function forgetHidden(seen, report) {
   for (var i = 0; i < report.needs.length; i++) {
     if (report.needs[i].hidden === true) delete seen[report.needs[i].key]
@@ -1081,6 +1081,7 @@ if (typeof module !== "undefined" && module.exports) {
     rowLabel: rowLabel,
     errorSummary: errorSummary,
     groupRows: groupRows,
+    openListed: openListed,
     moreWaiting: moreWaiting,
     TILE_ATTENTION: TILE_ATTENTION,
     TILE_WORKING: TILE_WORKING,

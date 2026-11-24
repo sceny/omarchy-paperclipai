@@ -426,6 +426,17 @@ await group("retry all follows the filter it was given", async () => {
   assert.ok(seen[0].url.indexOf("sort=decide") > 0, "and in the same order")
 })
 
+await group("retry all under All leaves a snoozed failure alone", async () => {
+  const snoozed = failedRunItem(2)
+  snoozed.dismissal = { kind: "snooze", snoozedUntil: new Date(Date.now() + 3600000).toISOString(), isActive: true }
+  routes["GET /api/companies/" + COMPANY + "/attention"] = attentionFeed([failedRunItem(1), snoozed])
+  routes["POST /api/agents/agent-1/wakeup"] = { status: 202, body: { status: "queued" } }
+  routes["POST /api/agents/agent-2/wakeup"] = { status: 202, body: { status: "queued" } }
+  const result = await run("retry-all", "--company", COMPANY, "--filter", "all")
+  assert.equal(result.last.attempted, 1, "the panel does not list it, so it is not repeated")
+  assert.deepEqual(seen.filter((r) => r.method === "POST").map((r) => r.url), ["/api/agents/agent-1/wakeup"])
+})
+
 // ------------------------------------------------------------ the backlog
 
 await group("clear-failed counts before it clears, and only clears failures", async () => {
@@ -539,44 +550,98 @@ await group("the probe counts the whole inbox, never the desk badge", async () =
   assert.equal(review.itemKey, "attention:review:iss-1")
 })
 
-await group("the probe's All filter asks for what was snoozed or cleared", async () => {
+// The shape the real server sends (seen on the rig): the snooze lives inside
+// the dismissal, and the top-level snoozedUntil is null.
+function snoozedReview(id, title) {
+  return {
+    sourceKind: "review",
+    subject: { kind: "issue", id: id, identifier: "SCE-1", title: title },
+    dismissalKey: "attention:review:" + id,
+    snoozedUntil: null,
+    dismissal: { kind: "snooze", snoozedUntil: new Date(Date.now() + 3600000).toISOString(), isActive: true }
+  }
+}
+
+function clearedReview(id, title) {
+  return {
+    sourceKind: "review",
+    subject: { kind: "issue", id: id, identifier: "SCE-2", title: title },
+    dismissalKey: "attention:review:" + id,
+    dismissal: { kind: "dismiss", dismissedAt: new Date().toISOString(), isActive: true }
+  }
+}
+
+function openReview(id, title) {
+  return {
+    sourceKind: "review",
+    subject: { kind: "issue", id: id, identifier: "SCE-3", title: title },
+    dismissalKey: "attention:review:" + id
+  }
+}
+
+await group("a row snoozed in Paperclip is not listed or counted, under either filter", async () => {
   routes["GET /api/health"] = { status: 200, body: { status: "ok" } }
   routes["GET /api/companies"] = {
     status: 200, body: { companies: [{ id: COMPANY, name: "Sceny" }] }
   }
   routes["GET /api/companies/" + COMPANY + "/heartbeat-runs"] = { status: 200, body: { runs: [] } }
-  routes["GET /api/companies/" + COMPANY + "/attention"] = {
-    status: 200,
-    body: {
-      totalCount: 1,
-      countsBySourceKind: {},
-      items: [{
-        sourceKind: "review",
-        subject: { kind: "issue", id: "iss-2", identifier: "SCE-1", title: "Snoozed one" },
-        dismissalKey: "attention:review:iss-2",
-        // The shape the real server sends (seen on the rig): the snooze lives
-        // inside the dismissal, and the top-level snoozedUntil is null.
-        snoozedUntil: null,
-        dismissal: {
-          kind: "snooze",
-          snoozedUntil: new Date(Date.now() + 3600000).toISOString(),
-          isActive: true
-        }
-      }]
-    }
-  }
+  // The server's two answers: the open inbox, and the feed with what you hid.
+  routes["GET /api/companies/" + COMPANY + "/attention"] = (request) =>
+    request.url.indexOf("includeDismissed=true") > 0
+      ? { status: 200, body: { totalCount: 3, countsBySourceKind: { review: 3 },
+                               items: [snoozedReview("iss-2", "Snoozed one"),
+                                       openReview("iss-3", "Open one"),
+                                       clearedReview("iss-4", "Cleared one")] } }
+      : { status: 200, body: { totalCount: 1, countsBySourceKind: { review: 1 },
+                               items: [openReview("iss-3", "Open one")] } }
 
   const needsMe = await runProbe()
-  assert.ok(seen[2].url.indexOf("includeDismissed") < 0, "the open inbox asks for the open inbox")
+  assert.ok(seen.every((r) => r.url.indexOf("includeDismissed") < 0), "the open inbox asks for the open inbox")
   assert.equal(needsMe.inboxFilter, "needs-me")
+  assert.deepEqual(needsMe.needs.map((r) => r.title), ["Open one"])
 
   seen = []
   const all = await runProbe("--inbox-filter", "all")
   assert.equal(all.inboxFilter, "all")
   assert.ok(seen.some((r) => r.url.indexOf("includeDismissed=true") > 0))
-  // A hidden row says it is hidden, so clearing one by mistake is findable.
-  assert.equal(all.needs[0].hidden, true)
-  assert.ok(all.needs[0].snoozedUntil.length > 0)
+  // What you cleared is listed, so clearing one by mistake is findable; what
+  // you snoozed is not listed at all.
+  assert.deepEqual(all.needs.map((r) => r.title), ["Open one", "Cleared one"])
+  assert.equal(all.needs[0].hidden, false)
+  assert.equal(all.needs[1].hidden, true)
+  assert.equal(all.needs[1].snoozedUntil, "")
+  // The count is the open inbox under either filter: nothing hidden needs you.
+  assert.equal(all.attention, 1)
+  assert.equal(all.inboxTotal, 1)
+  assert.deepEqual(all.inboxCounts, { review: 1 })
+  assert.equal(all.summary, needsMe.summary)
+})
+
+await group("a snooze or a clear that is spent hides nothing", async () => {
+  routes["GET /api/health"] = { status: 200, body: { status: "ok" } }
+  routes["GET /api/companies"] = {
+    status: 200, body: { companies: [{ id: COMPANY, name: "Sceny" }] }
+  }
+  routes["GET /api/companies/" + COMPANY + "/heartbeat-runs"] = { status: 200, body: { runs: [] } }
+  const past = new Date(Date.now() - 3600000).toISOString()
+  // The server attaches the dismissal even when it is spent, and says so.
+  const woke = openReview("iss-5", "Snooze ran out")
+  woke.dismissal = { kind: "snooze", snoozedUntil: past, isActive: false }
+  const moved = openReview("iss-6", "Moved after it was cleared")
+  moved.dismissal = { kind: "dismiss", dismissedAt: past, isActive: false }
+  // An older server that does not say: the time decides.
+  const older = openReview("iss-7", "Older server")
+  older.dismissal = { kind: "snooze", snoozedUntil: past }
+  const own = openReview("iss-8", "Own snooze ran out")
+  own.snoozedUntil = past
+  routes["GET /api/companies/" + COMPANY + "/attention"] = attentionFeed([woke, moved, older, own])
+
+  const report = await runProbe()
+  assert.equal(report.needs.length, 4)
+  for (const row of report.needs) {
+    assert.equal(row.hidden, false, row.title + " is open again")
+    assert.equal(row.snoozedUntil, "", row.title + " is not snoozed")
+  }
 })
 
 await group("an inbox the probe could not read says so, instead of reading zero", async () => {

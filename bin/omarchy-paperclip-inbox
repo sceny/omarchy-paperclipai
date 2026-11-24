@@ -297,12 +297,16 @@ def do_report_skip(writer: Writer, target, plugin: str, since: str, reason: str)
 # -------------------------------------------------------------------- the batch
 
 
-def failed_run_rows(writer: Writer, company: str, inbox_filter: str, limit: int):
+def failed_run_rows(writer: Writer, company: str, inbox_filter: str, limit: int,
+                    hidden_state=None):
     """The failed-run rows this batch will repeat, in the server's decide order.
 
     Read back from the same query the panel lists, so "retry all" means the
-    rows you are looking at and nothing else.
+    rows you are looking at and nothing else. A row snoozed in Paperclip is not
+    listed under either filter, so it is not repeated either; `hidden_state` is
+    the probe's, so the two read a snooze the same way.
     """
+    now = datetime.now(timezone.utc).timestamp()
     query = "/api/companies/%s/attention?sort=decide&limit=%d" % (company, FEED_PAGE)
     if inbox_filter == "all":
         query += "&includeDismissed=true"
@@ -312,6 +316,8 @@ def failed_run_rows(writer: Writer, company: str, inbox_filter: str, limit: int)
     rows = []
     for raw in payload.get("items") or []:
         if not isinstance(raw, dict) or raw.get("sourceKind") != "failed_run":
+            continue
+        if hidden_state is not None and hidden_state(raw, now)[0]:
             continue
         subject = raw.get("subject") if isinstance(raw.get("subject"), dict) else {}
         meta = subject.get("metadata") if isinstance(subject.get("metadata"), dict) else {}
@@ -326,8 +332,9 @@ def failed_run_rows(writer: Writer, company: str, inbox_filter: str, limit: int)
     return rows, ""
 
 
-def do_retry_all(writer: Writer, company: str, inbox_filter: str, limit: int) -> dict:
-    rows, error = failed_run_rows(writer, company, inbox_filter, limit)
+def do_retry_all(writer: Writer, company: str, inbox_filter: str, limit: int,
+                 hidden_state=None) -> dict:
+    rows, error = failed_run_rows(writer, company, inbox_filter, limit, hidden_state)
     if rows is None:
         return {"action": "retry-all", "ok": False, "attempted": 0, "retried": 0,
                 "refused": 0, "message": error, "results": []}
@@ -466,7 +473,7 @@ def main(argv=None) -> int:
                 emit(retry_run(writer, args.agent, args.run))
     elif args.command == "retry-all":
         limit = max(1, min(RETRY_ALL_MAX_LIMIT, args.limit))
-        emit(do_retry_all(writer, args.company, args.filter, limit))
+        emit(do_retry_all(writer, args.company, args.filter, limit, probe.hidden_state))
     else:
         emit(do_clear_failed(writer, args.company, args.older_than_days, args.apply))
     return 0
