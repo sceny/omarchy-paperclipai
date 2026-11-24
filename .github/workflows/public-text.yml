@@ -1,0 +1,48 @@
+name: public-text
+
+# The company's rules for public text, checked by a script (dev/public-text-check):
+# a pull request's title, body, commit messages, comments, reviews and review
+# comments name no setup of ours, leave nothing open without an issue and name no
+# other repository's issue without its owner. A push to develop reads the commit
+# messages it brings and the pull requests it merged, so a squash message that lands
+# is checked too; an open pull request is not the push's to fail. The pull request events
+# run from the merge ref, so this file works before a release reaches main; an
+# issue_comment run and a schedule take effect only from the default branch.
+# A merge_group run reads the pull request's text when the merge is asked for: a
+# review posted seconds before the merge starts its own run too late for the gate,
+# and the gate would pass on the run before it.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited]
+  push:
+    branches: [develop]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: public-text-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  public-text:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Public text against the rules
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 dev/public-text-check
