@@ -41,6 +41,16 @@ var DECISION_KINDS = { approval: true, decision: true, issue_thread_interaction:
 // every fifteen minutes must not be able to paper the screen in toasts.
 var MAX_ERROR_TOASTS = 3
 
+// How often the widget reads the instance. Each read asks the server for the
+// attention feed of every company, a heavy query, so the closed bar reads it
+// once a minute; the open panel reads it at least every 20 seconds.
+var REFRESH_DEFAULT_SEC = 60
+var REFRESH_PANEL_SEC = 20
+
+function refreshIntervalMs(seconds, panelOpen) {
+  return (panelOpen ? Math.min(seconds, REFRESH_PANEL_SEC) : seconds) * 1000
+}
+
 // A report shaped like the probe's output, for before the first poll lands.
 function emptyReport() {
   return {
@@ -1092,6 +1102,9 @@ if (typeof module !== "undefined" && module.exports) {
     hintKeys: hintKeys,
     primaryAction: primaryAction,
     SERVICE_PENDING_MS: SERVICE_PENDING_MS,
+    REFRESH_DEFAULT_SEC: REFRESH_DEFAULT_SEC,
+    REFRESH_PANEL_SEC: REFRESH_PANEL_SEC,
+    refreshIntervalMs: refreshIntervalMs,
     serviceControl: serviceControl,
     settlePending: settlePending,
     autoStartStep: autoStartStep,
