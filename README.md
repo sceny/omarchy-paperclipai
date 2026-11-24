@@ -164,8 +164,10 @@ bubble and the buttons go away). The strip is hidden while awake.
   that waits for you: an approval, a question or confirmation from an agent, a
   join request. Everything also toasts reviews, blockers, failed runs, the
   instance stopping or starting, and agents picking up work.
-- A row you snoozed or cleared raises no toast, at any level. When its
-  snooze ends it toasts once, like a new row.
+- A row snoozed in Paperclip (or with `S` in the panel) is not listed, counted
+  or toasted until its snooze ends; then it toasts once, like a new row. The
+  `All` inbox filter (`f`) adds only the rows you cleared, which never toast
+  and are not in the count.
 - To see the bubble but get no desktop toasts, set "Desktop notifications" to Off.
 - From a script: `omarchy-shell paperclip snooze`, `snoozeUntilMorning`, `focus`.
 

@@ -64,7 +64,7 @@ Panel {
   readonly property var tiles: Model.statTiles(service.report)
   // How many open rows this list does not reach. Named, never hidden: a list
   // that stops without saying so is how a number stops matching its list.
-  readonly property int moreWaiting: Model.moreWaiting(service.report, listedRows(needs), activeFilter)
+  readonly property int moreWaiting: Model.moreWaiting(service.report, Model.openListed(needs), activeFilter)
   // The probe's own complaints, shown under the button that acts on them.
   readonly property var problems: service.problems
 
@@ -82,12 +82,6 @@ Panel {
   // count and the company in between. One keypress must not be able to start
   // twenty agent runs.
   property bool retryArmed: false
-
-  function listedRows(groups) {
-    var total = 0
-    for (var i = 0; i < (groups || []).length; i++) total += Number(groups[i].count || 1)
-    return total
-  }
 
   readonly property string inboxOwner: {
     var companies = service.report && service.report.companies ? service.report.companies : []
@@ -879,8 +873,8 @@ Panel {
               HeaderPill {
                 label: Model.inboxFilterLabel(service.inboxFilter)
                 tooltip: service.inboxFilter === Model.INBOX_ALL
-                  ? "Showing everything, including what you snoozed or cleared — press f for needs me only"
-                  : "Showing the open inbox — press f to also see what you snoozed or cleared"
+                  ? "Showing the open inbox and what you cleared — press f for needs me only"
+                  : "Showing the open inbox — press f to also see what you cleared"
                 Layout.alignment: Qt.AlignVCenter
                 onClicked: service.cycleInboxFilter()
               }
@@ -1338,7 +1332,7 @@ Panel {
             if (!rowItem.row) return ""
             var parts = []
             if (rowItem.hiddenRow) {
-              parts.push(rowItem.row.snoozedUntil ? "snoozed" : "cleared")
+              parts.push("cleared")
             }
             if (rowItem.row.detail) parts.push(String(rowItem.row.detail))
             if (rowItem.row.ago) parts.push(String(rowItem.row.ago))

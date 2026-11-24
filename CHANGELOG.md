@@ -18,9 +18,11 @@ GitHub release with these notes.
 
 ### Fixes
 
-- **A row you snoozed or cleared raises no toast**, at any level, even while the
-  `All` inbox filter lists it. When its snooze ends it is announced once, like
-  any new row.
+- **A row snoozed in Paperclip stays out of the plugin** until its snooze ends:
+  it is not listed, counted or toasted, under either inbox filter, and Retry
+  all leaves it alone. The `All` filter now adds only the rows you cleared;
+  they raise no toast and are not in the bar's count. A row whose snooze ran
+  out, or that moved after you cleared it, is open again and toasts once.
 
 ## 0.3.0 — 2026-11-05
 

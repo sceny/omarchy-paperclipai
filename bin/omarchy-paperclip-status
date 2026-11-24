@@ -479,6 +479,46 @@ def age(iso: str, now: float) -> str:
     return "%dd" % (seconds // 86400)
 
 
+def epoch(iso) -> float:
+    """Seconds since the epoch, or 0 for anything that is not a time."""
+    text = str(iso or "").strip()
+    if not text:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def hidden_state(raw: dict, now: float):
+    """(snoozedUntil, cleared): a snooze or a clear that is still in force.
+
+    A row can be snoozed two ways in Paperclip: its own `snoozedUntil`, or an
+    inbox dismissal of kind "snooze". The server attaches the dismissal even
+    when it is spent (the snooze ran out, or the row moved after it was
+    cleared) and says which with `isActive`. A spent one hides nothing: the row
+    is back in the open inbox and is news again.
+    """
+    own = str(raw.get("snoozedUntil") or "")
+    if own and epoch(own) > now:
+        return own, False
+    dismissal = raw.get("dismissal") if isinstance(raw.get("dismissal"), dict) else None
+    if dismissal is None:
+        return "", False
+    until = str(dismissal.get("snoozedUntil") or "")
+    snooze = dismissal.get("kind") == "snooze" or bool(until)
+    active = dismissal.get("isActive")
+    if not isinstance(active, bool):
+        # A server that does not say: a snooze holds until its time, a clear holds.
+        active = epoch(until) > now if snooze else True
+    if not active:
+        return "", False
+    return (until, False) if snooze else ("", True)
+
+
 def as_list(payload, key: str):
     if isinstance(payload, list):
         return payload
@@ -503,11 +543,7 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
     retry_kind = RETRY_KINDS.get(kind, "")
 
     href = str(subject.get("href") or related.get("href") or "")
-    dismissal = raw.get("dismissal") if isinstance(raw.get("dismissal"), dict) else None
-    # The server nests the snooze in the dismissal:
-    # {"kind": "snooze", "snoozedUntil": ...}. Without reading it there, a
-    # snoozed row reads as cleared under the All filter.
-    snoozed = str(raw.get("snoozedUntil") or (dismissal or {}).get("snoozedUntil") or "")
+    snoozed, cleared = hidden_state(raw, now)
 
     row = {
         "key": str(raw.get("id") or raw.get("dedupKey") or "%s:%s" % (kind, subject.get("id"))),
@@ -531,7 +567,7 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
         "issueId": "",
         "actionId": "",
         "snoozedUntil": snoozed,
-        "hidden": bool(snoozed) or bool(dismissal),
+        "hidden": bool(snoozed) or cleared,
     }
 
     if kind == "failed_run":
@@ -558,21 +594,24 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
 def company_needs(api: Api, company: dict, keep: int, now: float, inbox_filter: str):
     """The open inbox: the things that are waiting for a person.
 
-    Returns (total, countsBySourceKind, rows). `total` is the whole feed under
-    this filter, `rows` is the first `keep` of it in the server's decide order.
+    Returns (total, countsBySourceKind, rows). `total` is the whole open inbox,
+    `rows` is the first `keep` of the filter's feed in the server's decide order.
 
     `keep` caps the rows asked for, not the count: the server computes
     `totalCount` and `countsBySourceKind` over the whole feed before it cuts
     the page. So a small page still carries an honest number, and a bar widget
     polling every twenty seconds does not have to pull a hundred enriched rows
     to know there are a hundred and forty-seven.
+
+    The count is always the open inbox: a row you snoozed or cleared does not
+    need you. A row snoozed in Paperclip is not listed under either filter
+    either; `All` adds only what you cleared, so a row cleared by mistake is
+    findable. The server cannot leave out the snoozed rows alone, so `All`
+    asks twice: the open inbox for the count, and the feed with what you hid
+    for the rows.
     """
     cid = company.get("id")
     query = "/api/companies/%s/attention?sort=decide&limit=%d" % (cid, keep)
-    if inbox_filter == "all":
-        # Also show what you snoozed or cleared, so a row cleared by mistake is
-        # findable. These are still open rows you hid, not a notification history.
-        query += "&includeDismissed=true"
     feed = api.get(query)
     if not isinstance(feed, dict):
         # A timeout here used to read as "nothing is waiting", which quietly
@@ -581,10 +620,19 @@ def company_needs(api: Api, company: dict, keep: int, now: float, inbox_filter: 
     total = to_int(feed.get("totalCount"))
     counts = feed.get("countsBySourceKind")
     counts = counts if isinstance(counts, dict) else {}
+    if inbox_filter == "all":
+        hid = api.get(query + "&includeDismissed=true")
+        if not isinstance(hid, dict):
+            return None, {}, []
+        feed = hid
     rows = []
-    for raw in as_list(feed, "items")[:keep]:
+    for raw in as_list(feed, "items"):
+        if len(rows) >= keep:
+            break
         if isinstance(raw, dict):
-            rows.append(inbox_row(api, company, raw, now))
+            row = inbox_row(api, company, raw, now)
+            if not row["snoozedUntil"]:
+                rows.append(row)
     return total, counts, rows
 
 
@@ -730,7 +778,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="inbox rows to ask for, 1-100 (default: 20). The counts are "
                              "over the whole feed either way.")
     parser.add_argument("--inbox-filter", default="needs-me", choices=list(INBOX_FILTERS),
-                        help="needs-me: the open inbox. all: also what you snoozed or cleared.")
+                        help="needs-me: the open inbox. all: also what you cleared. "
+                             "A snoozed row is never listed.")
     # The attention feed is the slowest call the probe makes: the server ranks
     # the whole inbox before it answers, and a long inbox is the case this
     # plugin exists for. Three seconds was short enough to time out and report

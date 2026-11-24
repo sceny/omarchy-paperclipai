@@ -223,6 +223,19 @@ function groupRows(rows) {
   return out
 }
 
+// How many open rows a grouped list holds. A row you cleared, listed under
+// the `All` filter, is not open and is not in the count it is set against.
+function openListed(groups) {
+  var total = 0
+  for (var i = 0; i < (groups || []).length; i++) {
+    var members = groups[i].members || [groups[i]]
+    for (var j = 0; j < members.length; j++) {
+      if (members[j].hidden !== true) total++
+    }
+  }
+  return total
+}
+
 // How many open rows the panel's list does not reach. Named rather than
 // hidden, so a cut-off list never pretends to be the whole inbox.
 function moreWaiting(report, listed, filter) {
@@ -754,25 +767,13 @@ function wakeNotification(report, level) {
   if (mode === NOTIFY_OFF || !report) return null
   if (mode === NOTIFY_NEEDED) {
     var decisions = decisionCount(report)
-    var more = false
-    // Under the `All` filter the server's counts take in what you snoozed or
-    // cleared. Count the listed rows still open instead; a cut list says so.
-    if (report.inboxFilter === INBOX_ALL) {
-      decisions = 0
-      var rows = Array.isArray(report.needs) ? report.needs : []
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].hidden !== true && isDecisionKind(rows[i].kind)) decisions++
-      }
-      more = toCount(report.inboxShown) < toCount(report.inboxTotal)
-    }
     if (decisions === 0) return null
     return {
       key: "snooze:over",
       urgency: "normal",
       glyph: GLYPH_PAPERCLIP,
       summary: "Snooze is over",
-      body: decisions === 1 && !more ? "1 decision waits for you."
-          : decisions + (more ? " or more" : "") + " decisions wait for you.",
+      body: decisions === 1 ? "1 decision waits for you." : decisions + " decisions wait for you.",
       action: "open"
     }
   }
@@ -860,9 +861,9 @@ function diffNotifications(previous, next, level, seen) {
   // moving to `Everything` later does not replay it.
   var freshErrors = []
   var freshDecisions = []
-  // A row you snoozed or cleared is not shown, whatever the level. The `All`
-  // inbox filter lists it so it can be found, never so it can toast; it stays
-  // unseen, so a snooze that ends is one toast, the way the reminder it is.
+  // A row you cleared is not shown, whatever the level. The `All` inbox filter
+  // lists it so it can be found, never so it can toast; it stays unseen, so a
+  // row that comes back is one toast. A snoozed row is never in the report.
   for (var i = 0; i < next.needs.length; i++) {
     var row = next.needs[i]
     if (row.hidden === true || out.seen[row.key]) continue
@@ -992,8 +993,8 @@ function mergeKeys(seen, keys) {
   return out
 }
 
-// A snoozed or cleared row is never counted as seen: when it comes back it is
-// news again, under either inbox filter.
+// A cleared row is never counted as seen: when it comes back it is news
+// again, under either inbox filter.
 function forgetHidden(seen, report) {
   for (var i = 0; i < report.needs.length; i++) {
     if (report.needs[i].hidden === true) delete seen[report.needs[i].key]
@@ -1039,6 +1040,7 @@ if (typeof module !== "undefined" && module.exports) {
     rowLabel: rowLabel,
     errorSummary: errorSummary,
     groupRows: groupRows,
+    openListed: openListed,
     moreWaiting: moreWaiting,
     TILE_ATTENTION: TILE_ATTENTION,
     TILE_WORKING: TILE_WORKING,
