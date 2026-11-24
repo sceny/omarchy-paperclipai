@@ -288,8 +288,8 @@ group("no notification carries a bell", () => {
     reachable: true,
     attention: 2,
     needs: [
-      { key: "a", identifier: "SCE-1", title: "Approve the plan", severity: "high" },
-      { key: "b", identifier: "SCE-2", title: "Answer a question" }
+      { key: "a", kind: "approval", identifier: "SCE-1", title: "Approve the plan", severity: "high" },
+      { key: "b", kind: "issue_thread_interaction", identifier: "SCE-2", title: "Answer a question" }
     ],
     moving: [{ key: "r1", identifier: "SCE-3", title: "Writing", agent: "Kai" }]
   }))
@@ -306,18 +306,18 @@ group("no notification carries a bell", () => {
       state: "needs-you",
       reachable: true,
       attention: 5,
-      needs: [1, 2, 3, 4, 5].map((n) => ({ key: "k" + n, title: "Item " + n }))
+      needs: [1, 2, 3, 4, 5].map((n) => ({ key: "k" + n, kind: "approval", title: "Item " + n }))
     })), Model.NOTIFY_NEEDED, {}),
     // The instance going away, and coming back.
     Model.diffNotifications(busy, Model.parseReport(JSON.stringify({
       state: "stopped", summary: "Paperclip is not running", reachable: false
-    })), Model.NOTIFY_NEEDED, {}),
+    })), Model.NOTIFY_ALL, {}),
     Model.diffNotifications(Model.parseReport(JSON.stringify({ state: "stopped", reachable: false })),
       seed, Model.NOTIFY_ALL, {}),
     // Nothing installed yet.
     Model.diffNotifications(seed, Model.parseReport(JSON.stringify({
       state: "not-installed", reachable: true
-    })), Model.NOTIFY_NEEDED, {})
+    })), Model.NOTIFY_ALL, {})
   ]
 
   let total = 0
@@ -368,7 +368,7 @@ group("an error is announced as an error", () => {
     ]
   }))
 
-  const out = Model.diffNotifications(quiet, broken, Model.NOTIFY_NEEDED, {})
+  const out = Model.diffNotifications(quiet, broken, Model.NOTIFY_ALL, {})
   const keys = out.notifications.map((n) => n.key)
   assert.ok(keys.indexOf("error:f1") >= 0, "the failed run must speak for itself")
   assert.ok(keys.indexOf("error:f2") >= 0, "the agent error must speak for itself")
@@ -386,14 +386,73 @@ group("an error is announced as an error", () => {
       key: "s" + n, kind: "failed_run", title: "Kai run failed", isError: true
     }))
   }))
-  const stormOut = Model.diffNotifications(quiet, storm, Model.NOTIFY_NEEDED, {})
+  const stormOut = Model.diffNotifications(quiet, storm, Model.NOTIFY_ALL, {})
   assert.equal(stormOut.notifications.filter((n) => n.key.indexOf("error:s") === 0).length, 3)
   assert.ok(stormOut.notifications.some((n) => n.key === "error:batch:7"))
 
-  // The old stored value still means the same thing.
-  assert.equal(Model.diffNotifications(quiet, broken, "Needed", {}).notifications.length,
+  // The old stored values still mean the same thing.
+  assert.equal(Model.diffNotifications(quiet, broken, "all", {}).notifications.length,
                out.notifications.length)
   assert.equal(Model.diffNotifications(quiet, broken, "Off", {}).notifications.length, 0)
+})
+
+group("needs-me announces pending decisions and nothing else", () => {
+  const quiet = Model.parseReport(JSON.stringify({
+    state: "idle", reachable: true, needs: [], moving: []
+  }))
+  const mixed = Model.parseReport(JSON.stringify({
+    state: "needs-you",
+    reachable: true,
+    needs: [
+      { key: "f1", kind: "failed_run", title: "Kai run failed", isError: true },
+      { key: "e1", kind: "agent_error_alert", title: "Panel Engineer", isError: true },
+      { key: "x1", kind: "recovery_action", title: "Hand back", isError: true },
+      { key: "r1", kind: "review", title: "Read this" },
+      { key: "b1", kind: "blocker_attention", title: "Unblock this" },
+      { key: "m1", kind: "budget_alert", title: "Budget at 90%" },
+      { key: "u1", title: "No kind at all" },
+      { key: "a1", kind: "approval", title: "Approve the hire" },
+      { key: "d1", kind: "decision", title: "Pick one" },
+      { key: "q1", kind: "issue_thread_interaction", title: "Answer a question" },
+      { key: "j1", kind: "join_request", title: "Let them in" }
+    ],
+    moving: [{ key: "w1", title: "Writing", agent: "Kai" }]
+  }))
+  const out = Model.diffNotifications(quiet, mixed, Model.NOTIFY_NEEDED, {})
+  assert.deepEqual(out.notifications.map((n) => n.key).sort(),
+    ["needs:batch:4"], "four fresh decisions summarize, and nothing else speaks")
+  // Every row is remembered, so moving to Everything later replays nothing.
+  for (const key of ["f1", "e1", "x1", "r1", "b1", "m1", "u1", "a1", "d1", "q1", "j1", "w1"]) {
+    assert.ok(out.seen[key], key + " is remembered")
+  }
+  assert.equal(Model.diffNotifications(mixed, mixed, Model.NOTIFY_ALL, out.seen).notifications.length, 0)
+
+  const one = Model.diffNotifications(quiet, Model.parseReport(JSON.stringify({
+    state: "needs-you", reachable: true,
+    needs: [
+      { key: "f1", kind: "failed_run", title: "Kai run failed", isError: true },
+      { key: "q1", kind: "issue_thread_interaction", identifier: "SCE-9", title: "Answer a question" }
+    ]
+  })), Model.NOTIFY_NEEDED, {})
+  assert.deepEqual(one.notifications.map((n) => n.key), ["needs:q1"])
+  assert.equal(one.notifications[0].summary, "SCE-9 Answer a question")
+
+  // The instance's own state is on the bar icon; only Everything toasts it.
+  const stopped = Model.parseReport(JSON.stringify({ state: "stopped", reachable: false }))
+  assert.equal(Model.diffNotifications(quiet, stopped, Model.NOTIFY_NEEDED, {}).notifications.length, 0)
+  assert.equal(Model.diffNotifications(quiet, stopped, Model.NOTIFY_ALL, {}).notifications[0].key,
+    "instance:stopped")
+  const bare = Model.parseReport(JSON.stringify({ state: "not-installed", reachable: true }))
+  assert.equal(Model.diffNotifications(quiet, bare, Model.NOTIFY_NEEDED, {}).notifications.length, 0)
+
+  // Wall of decisions at needs-me says what they are.
+  assert.equal(out.notifications[0].summary, "4 decisions wait for you")
+  // The legacy stored value is needs-me.
+  assert.equal(Model.diffNotifications(quiet, mixed, "Needed", {}).notifications.length, 1)
+
+  assert.equal(Model.isDecisionKind("approval"), true)
+  assert.equal(Model.isDecisionKind("review"), false)
+  assert.equal(Model.isDecisionKind(""), false)
 })
 
 // ---------------------------------------------------------------- snooze
@@ -526,10 +585,17 @@ group("the tooltip says why the plugin is quiet", () => {
 })
 
 group("a snooze that ends says so once, and never replays the backlog", () => {
-  const waiting = { inboxTotal: 3, attention: 3 }
+  const waiting = { inboxTotal: 5, attention: 5,
+    inboxCounts: { approval: 2, issue_thread_interaction: 1, failed_run: 2 } }
   const wake = Model.wakeNotification(waiting, Model.NOTIFY_NEEDED)
   assert.equal(wake.summary, "Snooze is over")
-  assert.equal(wake.body, "3 things need you.")
+  // Needs-me counts only the decisions, over the server's counts by kind.
+  assert.equal(wake.body, "3 decisions wait for you.")
+  assert.equal(Model.wakeNotification({ inboxTotal: 2, inboxCounts: { join_request: 1, review: 1 } },
+    Model.NOTIFY_NEEDED).body, "1 decision waits for you.")
+  assert.equal(Model.wakeNotification({ inboxTotal: 4, inboxCounts: { failed_run: 4 } },
+    Model.NOTIFY_NEEDED), null, "no decision waiting, nothing to say")
+  assert.equal(Model.wakeNotification(waiting, Model.NOTIFY_ALL).body, "5 things need you.")
   assert.equal(Model.wakeNotification({ inboxTotal: 1 }, Model.NOTIFY_ALL).body, "1 thing needs you.")
   assert.equal(Model.wakeNotification({ inboxTotal: 0 }, Model.NOTIFY_NEEDED), null)
   // Notifications off means off, snooze or no snooze.

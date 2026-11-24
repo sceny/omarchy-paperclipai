@@ -26,9 +26,16 @@ var NOTIFY_ALL = "Everything"
 var INBOX_NEEDS_ME = "needs-me"
 var INBOX_ALL = "all"
 
-// "Error" means error. Without this list, `Needs-me` only told you about a
-// failure when the failure happened to also be in the attention feed.
+// "Error" means error. `Everything` names a failure as a failure, never as one
+// more thing in a "5 things need you" summary.
 var ERROR_KINDS = { failed_run: true, agent_error_alert: true, recovery_action: true }
+
+// The inbox rows that are a decision waiting on a person: an approval, a board
+// decision, a question or confirmation an agent asked in a thread, a join
+// request. These are the only rows `Needs-me` raises a toast for. Reviews,
+// blockers, budget alerts and failures stay in the panel and the bubble, and
+// reach the desktop under `Everything`.
+var DECISION_KINDS = { approval: true, decision: true, issue_thread_interaction: true, join_request: true }
 
 // Past this many fresh error rows in one poll, summarize. A watchdog looping
 // every fifteen minutes must not be able to paper the screen in toasts.
@@ -91,7 +98,7 @@ function notificationLabel(level) {
   var mode = normalizeNotifyLevel(level)
   if (mode === NOTIFY_OFF) return "notifications off"
   if (mode === NOTIFY_ALL) return "notify: everything"
-  return "notify: needs me & errors"
+  return "notify: decisions"
 }
 
 function inboxFilterLabel(filter) {
@@ -100,6 +107,20 @@ function inboxFilterLabel(filter) {
 
 function isErrorKind(kind) {
   return ERROR_KINDS[String(kind || "")] === true
+}
+
+function isDecisionKind(kind) {
+  return DECISION_KINDS[String(kind || "")] === true
+}
+
+// How many pending decisions the whole feed holds, from the server's counts by
+// kind, so rows past the listed page are counted too.
+function decisionCount(report) {
+  var counts = report && report.inboxCounts
+  if (!counts || typeof counts !== "object") return 0
+  var total = 0
+  for (var kind in DECISION_KINDS) total += toCount(counts[kind])
+  return total
 }
 
 function parseReport(raw) {
@@ -727,9 +748,23 @@ function quietState(snooze, omarchyDnd, now) {
 
 // Said once when a timed snooze runs out by itself and rows are waiting. The
 // backlog is never replayed: one line, one click, then the panel is the list.
+// `Needs-me` counts only the decisions, the same rows it would have toasted.
 function wakeNotification(report, level) {
-  if (normalizeNotifyLevel(level) === NOTIFY_OFF) return null
-  var total = report ? (toCount(report.inboxTotal) || toCount(report.attention)) : 0
+  var mode = normalizeNotifyLevel(level)
+  if (mode === NOTIFY_OFF || !report) return null
+  if (mode === NOTIFY_NEEDED) {
+    var decisions = decisionCount(report)
+    if (decisions === 0) return null
+    return {
+      key: "snooze:over",
+      urgency: "normal",
+      glyph: GLYPH_PAPERCLIP,
+      summary: "Snooze is over",
+      body: decisions === 1 ? "1 decision waits for you." : decisions + " decisions wait for you.",
+      action: "open"
+    }
+  }
+  var total = toCount(report.inboxTotal) || toCount(report.attention)
   if (total === 0) return null
   return {
     key: "snooze:over",
@@ -770,7 +805,11 @@ function diffNotifications(previous, next, level, seen) {
     return out
   }
 
-  if (previous.reachable && !next.reachable) {
+  // `Needs-me` is pending decisions and nothing else. The instance's own state
+  // shows on the bar icon; a toast for it is `Everything`'s.
+  var all = mode === NOTIFY_ALL
+
+  if (previous.reachable && !next.reachable && all) {
     out.notifications.push({
       key: "instance:stopped",
       urgency: "critical",
@@ -779,7 +818,7 @@ function diffNotifications(previous, next, level, seen) {
       body: "Nothing is answering on " + String(next.apiBase || "the instance") + ".",
       action: "doctor"
     })
-  } else if (!previous.reachable && next.reachable && mode === NOTIFY_ALL) {
+  } else if (!previous.reachable && next.reachable && all) {
     out.notifications.push({
       key: "instance:started",
       urgency: "low",
@@ -790,7 +829,7 @@ function diffNotifications(previous, next, level, seen) {
     })
   }
 
-  if (next.state === "not-installed" && previous.state !== "not-installed") {
+  if (all && next.state === "not-installed" && previous.state !== "not-installed") {
     out.notifications.push({
       key: "instance:not-installed",
       urgency: "normal",
@@ -801,16 +840,19 @@ function diffNotifications(previous, next, level, seen) {
     })
   }
 
-  // Errors and decisions are separated here, not because they deserve
-  // different urgency, but because "needs me & errors" has to mean both. An
-  // error folded into a "5 things need you" summary is an error you did not
-  // hear about.
+  // Errors and the rest are separated under `Everything`, not because they
+  // deserve different urgency, but because an error folded into a "5 things
+  // need you" summary is an error you did not hear about. Under `Needs-me` only
+  // the decisions are fresh; every other row is still marked seen below, so
+  // moving to `Everything` later does not replay it.
   var freshErrors = []
   var freshDecisions = []
   for (var i = 0; i < next.needs.length; i++) {
     var row = next.needs[i]
     if (out.seen[row.key]) continue
-    if (isErrorKind(row.kind) || row.isError === true) freshErrors.push(row)
+    if (!all) {
+      if (isDecisionKind(row.kind)) freshDecisions.push(row)
+    } else if (isErrorKind(row.kind) || row.isError === true) freshErrors.push(row)
     else freshDecisions.push(row)
   }
 
@@ -846,7 +888,7 @@ function diffNotifications(previous, next, level, seen) {
       key: "needs:batch:" + freshDecisions.length,
       urgency: "normal",
       glyph: GLYPH_PAPERCLIP,
-      summary: freshDecisions.length + " things need you",
+      summary: freshDecisions.length + (all ? " things need you" : " decisions wait for you"),
       body: "Open Paperclip to work through them.",
       action: "open"
     })
@@ -864,7 +906,7 @@ function diffNotifications(previous, next, level, seen) {
     }
   }
 
-  if (mode === NOTIFY_ALL) {
+  if (all) {
     for (var k = 0; k < next.moving.length; k++) {
       var run = next.moving[k]
       if (out.seen[run.key]) continue
@@ -967,6 +1009,8 @@ if (typeof module !== "undefined" && module.exports) {
     notificationLabel: notificationLabel,
     inboxFilterLabel: inboxFilterLabel,
     isErrorKind: isErrorKind,
+    isDecisionKind: isDecisionKind,
+    decisionCount: decisionCount,
     rowLabel: rowLabel,
     errorSummary: errorSummary,
     groupRows: groupRows,

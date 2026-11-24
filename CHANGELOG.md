@@ -6,6 +6,16 @@ Each version, newest first, grouped by what it touches. `omarchy plugin
 update sceny.paperclipai` brings the latest; each is a tag (`vX.Y.Z`) and a
 GitHub release with these notes.
 
+## Unreleased
+
+### Upgrading
+
+- **Desktop notifications at `Needs-me` are for pending decisions only**: an
+  approval, a question or confirmation an agent asked, a join request. Reviews,
+  blockers, budget alerts, failed runs and the instance stopping no longer
+  raise a toast at this level; they stay in the panel and the bar count, and
+  `Everything` still announces them. The stored setting is unchanged.
+
 ## 0.3.0 — 2026-11-05
 
 ### Highlights
