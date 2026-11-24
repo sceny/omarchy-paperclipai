@@ -36,7 +36,7 @@
         "label": "Desktop notifications",
         "options": ["Off", "Needs-me", "Everything"],
         "defaultValue": "Needs-me",
-        "description": "Needs-me: something waits on you, a run failed, or the instance died. Everything: also when the instance starts and agents pick up work. Notifications live in Omarchy's notification centre, which is where their history is."
+        "description": "Needs-me: only a decision that waits for you (an approval, a question or confirmation from an agent, a join request). Everything: also reviews, blockers, failed runs, the instance stopping or starting, and agents picking up work. Notifications live in Omarchy's notification centre, which is where their history is."
       },
       {
         "key": "inboxFilter",
