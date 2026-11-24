@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Make the release head: one commit on origin/main whose tree is origin/develop's.
+
+  dev/release-head X.Y.Z      release-head-X.Y.Z: parent origin/main, tree of origin/develop
+
+A pull request into main reads every commit it brings. Opened from develop, that is
+every commit develop has and main does not, and each one is read again. Opened from
+the release head, it is this one commit, whose message is written for it. The branch
+is made without touching the working tree.
+
+It refuses: a manifest.json on origin/develop whose version is not X.Y.Z, a CHANGELOG.md
+there with no '## X.Y.Z — ' section, a version already tagged (here or on the remote),
+and a branch that exists (here or on the remote). Push the branch and open the pull
+request with the commands it prints.
+"""
+import argparse
+import re
+import subprocess
+import sys
+
+
+def fail(message):
+    sys.exit(f"release-head: {message}")
+
+
+def git(*args, check=True):
+    done = subprocess.run(["git", *args], capture_output=True, text=True)
+    if check and done.returncode != 0:
+        fail(f"git {' '.join(args)} failed: {done.stderr.strip()}")
+    return done
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Make the release head: one commit on main with develop's tree.")
+    parser.add_argument("version", help="X.Y.Z")
+    parser.add_argument("--remote", default="origin")
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
+        fail(f"'{args.version}' is not X.Y.Z")
+    remote = args.remote
+    git("fetch", "--quiet", "--tags", remote, "main", "develop")
+
+    tag = f"v{args.version}"
+    if git("rev-parse", "-q", "--verify", f"refs/tags/{tag}", check=False).returncode == 0:
+        fail(f"{tag} is already tagged")
+    if git("ls-remote", "--tags", remote, f"refs/tags/{tag}").stdout.strip():
+        fail(f"{tag} is already tagged on {remote}")
+
+    branch = f"release-head-{args.version}"
+    if git("rev-parse", "-q", "--verify", f"refs/heads/{branch}", check=False).returncode == 0:
+        fail(f"branch {branch} already exists")
+    if git("ls-remote", "--heads", remote, branch).stdout.strip():
+        fail(f"branch {branch} already exists on {remote}")
+
+    manifest = git("show", f"{remote}/develop:manifest.json").stdout
+    versions = re.findall(r'^\s*"version"\s*:\s*"([^"]*)"', manifest, re.M)
+    if versions != [args.version]:
+        fail(f"manifest.json on {remote}/develop has version {versions}, not {args.version}")
+    changelog = git("show", f"{remote}/develop:CHANGELOG.md").stdout
+    if not re.search(rf"^## {re.escape(args.version)} — ", changelog, re.M):
+        fail(f"CHANGELOG.md on {remote}/develop has no section for {args.version}")
+
+    main_commit = git("rev-parse", f"{remote}/main").stdout.strip()
+    develop_tree = git("rev-parse", f"{remote}/develop^{{tree}}").stdout.strip()
+    message = f"Release {args.version}: the candidate's tree, one commit on main"
+    commit = git("commit-tree", develop_tree, "-p", main_commit, "-m", message).stdout.strip()
+    git("update-ref", f"refs/heads/{branch}", commit)
+
+    print(f"{branch}: {commit} (parent {remote}/main {main_commit[:7]}, tree of {remote}/develop)")
+    print(f"next: git push -u {remote} {branch}; gh pr create --base main --head {branch} --title \"Release {args.version}\"")
+    print(f"then, before the merge: git rev-parse {branch}^{{tree}} must equal git rev-parse {remote}/develop^{{tree}}")
+
+
+if __name__ == "__main__":
+    main()

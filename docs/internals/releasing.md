@@ -28,7 +28,7 @@ this template. `X.Y.Z` is the version.
 
 | Kind | When | Branch | Pull request into |
 |---|---|---|---|
-| **minor** | a new feature on `develop` | `release-X.Y.Z` from `develop` | `develop`, then `develop` into `main` |
+| **minor** | a new feature on `develop` | `release-X.Y.Z` from `develop` | the release head (below) into `main`, then `main` into `develop` |
 | **patch** | fixes only on `develop` | the same as minor | the same as minor |
 | **urgent** | a fix users need now, or a maintainer's finding on the marketplace issue; only after the owner's go for it | `fix-X.Y.Z` from `main` | `main`, then `main` into `develop` |
 
@@ -41,7 +41,7 @@ this template. `X.Y.Z` is the version.
 | R4 | release security review: the whole plugin, plus `last-tag..candidate` | the Plugin Security Reviewer | R2 | PASS on the candidate SHA; a FAIL rejects the candidate |
 | R5 | the owner's machine on the candidate | Plugin DevOps | R3, R4 | the owner's folder is at the SHA and the shell is restarted after (*The owner's request*); the back date is on R0's status page |
 | R6 | the owner's go: the status page and nothing else | the chief of staff carries it to the owner | R5 | the owner said go or no for that SHA |
-| R7 | merge, tag, publish, back to `develop` (*Releasing* steps 2 and 3) | Plugin DevOps | R6 | tag `vX.Y.Z` on a merge commit, never a squash; the release is published; `develop` is level with `main` |
+| R7 | merge, tag, publish, back to `develop` (*Releasing* steps 2, 3 and 3b) | Plugin DevOps | R6 | tag `vX.Y.Z` on a merge commit, never a squash; the release is published; `develop` is level with `main` |
 | R8 | the owner's machine back on `develop` (*The owner's request*) | Plugin DevOps | R5 | the folder is on `develop`, `follow-develop`'s next line for it reads `updated` or `up-to-date`, and `dev/loaded-code` exits 0, by the back date at the latest |
 
 On R0, the plugin manager then files or edits the marketplace issue and opens
@@ -138,6 +138,36 @@ The release pull request into `main` is merged with a merge commit. The ruleset
 on `main` allows that method only, so GitHub refuses a squash or a rebase before
 the merge. The `release` run on `main` checks it again after tagging, as a
 second check: a single-parent commit fails there.
+
+## The release head: `dev/release-head`
+
+A pull request into `main` reads every commit it brings. From `develop`, that is
+every commit `develop` has and `main` does not, so a commit already public on
+`develop` is read again on each release, and one whose text a later check
+rejects blocks the release. The release head avoids that: one commit on `main`
+whose tree is the candidate's, and whose message is written for it.
+
+```bash
+dev/release-head 0.3.0    # release-head-0.3.0: parent origin/main, tree of origin/develop
+git push -u origin release-head-0.3.0
+gh pr create --base main --head release-head-0.3.0 --title "Release 0.3.0"
+git rev-parse release-head-0.3.0^{tree}    # must equal the next line
+git rev-parse origin/develop^{tree}
+```
+
+- It refuses a `manifest.json` on `origin/develop` whose version is not `X.Y.Z`,
+  a `CHANGELOG.md` there with no section for it, a version already tagged here
+  or on origin, and a branch that exists. It does not touch the working tree.
+- The tree equality is checked before the merge. A different tree means
+  `develop` moved after the script ran: run `dev/release-head` again, on the new
+  head, and the checks of the candidate run on the new SHA.
+- The merge is the one into `main` in *Releasing* step 2. Then step 3b brings
+  `develop` level with `main`: `git merge-base --is-ancestor origin/main
+  origin/develop` is false after a release head, so `release` warns and does not
+  sync `develop`. Merge `main` into `develop` by hand (a pull request into
+  `develop`, through the merge queue), as the step says.
+- Tested in `test/test_release_head.py`, which builds the case in a throwaway
+  repository: the commit that fails on `develop` passes on the release head.
 
 ## Every pull request
 
