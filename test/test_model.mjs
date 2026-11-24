@@ -9,6 +9,7 @@ import assert from "node:assert/strict"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
+import { readFileSync } from "node:fs"
 
 const require = createRequire(import.meta.url)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -940,6 +941,23 @@ group("auto-start step", () => {
   assert.equal(Model.autoStartStep(false, down("", { service: { installed: false } }), true, false).action, "")
   assert.equal(Model.autoStartStep(false, null, true, false).action, "")
   assert.equal(Model.autoStartStep(false, { state: "needs-you", reachable: true }, true, false).action, "")
+})
+
+group("the bar reads once a minute, the open panel at least every 20 seconds", () => {
+  assert.equal(Model.REFRESH_DEFAULT_SEC, 60)
+  assert.equal(Model.refreshIntervalMs(Model.REFRESH_DEFAULT_SEC, false), 60000)
+  assert.equal(Model.refreshIntervalMs(Model.REFRESH_DEFAULT_SEC, true), 20000)
+  // A shorter interval the user chose is kept, open or closed.
+  assert.equal(Model.refreshIntervalMs(5, true), 5000)
+  assert.equal(Model.refreshIntervalMs(15, false), 15000)
+  assert.equal(Model.refreshIntervalMs(300, false), 300000)
+  assert.equal(Model.refreshIntervalMs(300, true), 20000)
+  // The manifest's default and the widget's fallback are the same number.
+  const widget = JSON.parse(readFileSync(path.join(root, "manifest.json"), "utf8")).barWidget
+  assert.equal(widget.defaults.refreshIntervalSec, Model.REFRESH_DEFAULT_SEC)
+  const field = widget.schema.find(f => f.key === "refreshIntervalSec")
+  assert.equal(field.defaultValue, Model.REFRESH_DEFAULT_SEC)
+  assert.match(field.description, new RegExp("every " + Model.REFRESH_PANEL_SEC + " seconds"))
 })
 
 console.log("all groups passed")

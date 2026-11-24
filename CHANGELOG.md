@@ -10,6 +10,12 @@ GitHub release with these notes.
 
 ### Upgrading
 
+- **The widget reads Paperclip once a minute** (was every 20 seconds), and
+  at least every 20 seconds while the panel is open (was 10). Each read asks
+  the server for every company's inbox, which is heavy on a busy instance.
+  The new default applies only where *Refresh interval* was never set; an
+  interval you chose is kept. An action you take still refreshes the panel
+  right after it.
 - **Desktop notifications at `Needs-me` are for pending decisions only**: an
   approval, a question or confirmation an agent asked, a join request. Reviews,
   blockers, budget alerts, failed runs and the instance stopping no longer

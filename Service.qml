@@ -50,7 +50,7 @@ Item {
   // Off leaves the layout and the colors alone and only removes the motion,
   // for people who find animated chrome distracting.
   readonly property bool animations: String(setting("animations", "On")) !== "Off"
-  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 20, 5, 600)
+  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", Model.REFRESH_DEFAULT_SEC, 5, 600)
   readonly property string instanceState: String(report ? report.state : "unknown")
   readonly property int attention: report ? report.attention : 0
   readonly property int working: report ? report.working : 0
@@ -654,7 +654,7 @@ Item {
 
   Timer {
     id: refreshTimer
-    interval: (root.panelOpen ? Math.min(root.refreshIntervalSec, 10) : root.refreshIntervalSec) * 1000
+    interval: Model.refreshIntervalMs(root.refreshIntervalSec, root.panelOpen)
     repeat: true
     running: root.pluginDir !== ""
     triggeredOnStart: true
