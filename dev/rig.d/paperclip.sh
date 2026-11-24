@@ -92,6 +92,54 @@ rig_pc_healthy() {
     jq -e '.status == "ok"' >/dev/null 2>&1
 }
 
+# How long a start may take to answer health. A test shortens it; the rig does not.
+RIG_PC_HEALTH_SECS=${RIG_PC_HEALTH_SECS:-180}
+
+rig_pc_timing() {
+  # One line in evidence/instance-timing.log: when, how far into this start,
+  # and how loaded the machine was. A start that fails is read from these.
+  local load=?
+  read -r load _ </proc/loadavg 2>/dev/null || true
+  mkdir -p "$RIG_EVIDENCE"
+  printf '%s +%3ss load1=%s %s\n' "$(date -u +%H:%M:%S)" \
+    "$((SECONDS - ${RIG_PC_T0:-$SECONDS}))" "$load" "$*" >>"$RIG_EVIDENCE/instance-timing.log"
+}
+
+rig_pc_postgres_listening() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$RIG_PG_PORT") 2>/dev/null
+}
+
+rig_pc_health_evidence() {
+  # rig_pc_health_evidence <why>: what a failed start leaves for the next
+  # reader, in the evidence directory (kept by teardown, returned by
+  # `dev/sandbox run`). Bounded: the logs' last megabyte, one process listing.
+  local dest="$RIG_EVIDENCE/instance-start-failed" dir f
+  dir=$(rig_pc_instance_dir)
+  mkdir -p "$dest"
+  rig_pc_timing "failed: $1"
+  tail -c 1048576 "$RIG_LOGS/instance.log" >"$dest/instance.log" 2>/dev/null || true
+  while IFS= read -r f; do
+    mkdir -p "$dest/$(dirname "${f#"$dir"/}")"
+    tail -c 1048576 "$f" >"$dest/${f#"$dir"/}" 2>/dev/null || true
+  done < <(find "$dir/logs" "$dir/db" -maxdepth 3 -type f \
+    \( -name '*.log' -o -name '*.log.*' -o -name postmaster.pid -o -name postmaster.opts \) 2>/dev/null)
+  {
+    printf 'health answer now: %s\n' "$(curl -sS --max-time 4 -o /dev/null -w '%{http_code}' "$(rig_pc_api_base)/api/health" 2>&1)"
+    printf 'postgres port %s accepting: %s\n' "$RIG_PG_PORT" "$(rig_pc_postgres_listening && echo yes || echo no)"
+    printf '\n-- loadavg\n'
+    cat /proc/loadavg 2>/dev/null
+    for f in cpu memory io; do
+      printf '\n-- pressure %s\n' "$f"
+      cat "/proc/pressure/$f" 2>/dev/null
+    done
+    printf '\n-- cgroup memory.events, memory.current, memory.max\n'
+    cat /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max 2>/dev/null
+    printf '\n-- processes by cpu\n'
+    ps -eo pid,ppid,stat,etimes,pcpu,pmem,args --sort=-pcpu 2>/dev/null | cut -c1-200 | head -40
+  } >"$dest/machine.txt" 2>&1
+  rig_warn "no health answer: timing in $RIG_EVIDENCE/instance-timing.log, logs in $dest"
+}
+
 rig_pc_start() {
   rig_pc_healthy && {
     rig_ok "throwaway instance already answering on $(rig_pc_api_base)"
@@ -103,6 +151,7 @@ rig_pc_start() {
   log="$RIG_LOGS/instance.log"
 
   rig_step "starting the throwaway instance ($cli run)"
+  RIG_PC_T0=$SECONDS
   # PORT is belt to the config's braces: if anything ever regenerates the
   # config, the listen port still cannot fall back to the owner's 3100.
   # nohup rather than setsid: nohup execs, so $! is the instance itself and
@@ -112,22 +161,30 @@ rig_pc_start() {
     "$cli" run -d "$RIG_PAPERCLIP_DATA" -i "$RIG_INSTANCE_ID" >>"$log" 2>&1) &
   RIG_INSTANCE_PID=$!
   rig_state_set instance_pid "$RIG_INSTANCE_PID"
+  rig_pc_timing "start sent (pid $RIG_INSTANCE_PID)"
 
-  local deadline=$((SECONDS + 180))
+  local deadline=$((SECONDS + RIG_PC_HEALTH_SECS)) pg_seen=0
   while ((SECONDS < deadline)); do
     kill -0 "$RIG_INSTANCE_PID" 2>/dev/null || {
       rig_fail "the throwaway instance exited; last lines of $log:"
       tail -20 "$log" >&2
+      rig_pc_health_evidence "the instance exited"
       rig_die "instance did not start"
     }
+    if ((!pg_seen)) && rig_pc_postgres_listening; then
+      pg_seen=1
+      rig_pc_timing "postgres accepting connections"
+    fi
     rig_pc_healthy && {
+      rig_pc_timing "first health answer"
       rig_ok "throwaway instance answering on $(rig_pc_api_base) (pid $RIG_INSTANCE_PID)"
       return 0
     }
     sleep 3
   done
-  rig_fail "no health after 180s; last lines of $log:"
+  rig_fail "no health after ${RIG_PC_HEALTH_SECS}s; last lines of $log:"
   tail -20 "$log" >&2
+  rig_pc_health_evidence "no health after ${RIG_PC_HEALTH_SECS}s"
   rig_die "instance never became healthy"
 }
 
@@ -136,14 +193,25 @@ rig_pc_stop() {
   # the data directory intact and restartable.
   [[ -n ${RIG_INSTANCE_PID:-} ]] || return 0
   rig_step "stopping the throwaway instance (pid $RIG_INSTANCE_PID)"
+  RIG_PC_T0=$SECONDS
+  rig_pc_timing "stop: TERM to the instance (pid $RIG_INSTANCE_PID)"
   rig_kill_tree "$RIG_INSTANCE_PID" TERM
-  rig_wait_gone "$RIG_INSTANCE_PID" 30 || rig_kill_tree "$RIG_INSTANCE_PID" KILL
+  rig_wait_gone "$RIG_INSTANCE_PID" 30 || {
+    rig_pc_timing "stop: the instance ignored TERM for 30 s, KILL"
+    rig_kill_tree "$RIG_INSTANCE_PID" KILL
+  }
   rig_wait_gone "$RIG_INSTANCE_PID" 10 || true
+  rig_pc_timing "stop: the instance is gone"
 
   local pg
   for pg in $(pgrep -f -- "-D $RIG_PAPERCLIP_DATA" 2>/dev/null); do
+    rig_pc_timing "stop: TERM to postgres (pid $pg), sent by the rig's own stop"
     kill -TERM "$pg" 2>/dev/null || true
-    rig_wait_gone "$pg" 15 || kill -KILL "$pg" 2>/dev/null || true
+    rig_wait_gone "$pg" 15 || {
+      rig_pc_timing "stop: postgres (pid $pg) ignored TERM for 15 s, KILL"
+      kill -KILL "$pg" 2>/dev/null || true
+    }
+    rig_pc_timing "stop: postgres (pid $pg) is gone"
   done
 
   local deadline=$((SECONDS + 20))
@@ -182,9 +250,12 @@ rig_pc_assert_isolated() {
 
 # ------------------------------------------------------------------ seed ----
 #
-# One inbox row of each kind a panel check needs, in the throwaway instance:
-# failed_run, review, issue_thread_interaction, blocker_attention (and the
-# agent_error_alert a failed agent brings with it). Everything goes through the
+# A busy panel in the throwaway instance: RIG_SEED_WORKERS agents with a live
+# run each (the "working" card and the agent list) and at least
+# RIG_SEED_MIN_ROWS inbox rows (a two-digit bar bubble and a scrolling list),
+# with every kind a panel check needs: failed_run, review,
+# issue_thread_interaction, blocker_attention (and the agent_error_alert a
+# failed agent brings with it). Everything goes through the
 # instance's own API except one row: the inbox lists a failed run only after a
 # "Bounded retry exhausted" lifecycle event, which the server writes after
 # several scheduled retries, far longer than a check can wait. That event is
@@ -192,6 +263,15 @@ rig_pc_assert_isolated() {
 
 RIG_SEED_COMPANY="Rig Co"
 RIG_SEED_AGENT="Rig Runner"
+# Agents that run for as long as the rig lives, so the panel has live runs.
+RIG_SEED_WORKERS=(
+  "Rig Worker One|Rig: long-running task one"
+  "Rig Worker Two|Rig: long-running task two"
+)
+# Open items of each kind, on top of the one failed run: 4 blocked + 4 review
+# + 4 questions + the failed run and its agent alert is at least 13 rows.
+RIG_SEED_PER_KIND=4
+RIG_SEED_MIN_ROWS=10
 
 rig_pc_api() {
   # rig_pc_api <METHOD> <path> [json-body] — the body on stdout, failure on HTTP errors.
@@ -213,12 +293,68 @@ rig_seed_issue() {
   printf '%s\n' "$id"
 }
 
+rig_pc_live_runs() {
+  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
+    jq -r '[.[] | select(.status == "running")] | length'
+}
+
+rig_pc_agent_live_runs() {
+  # Queued or running runs of one agent.
+  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
+    jq -r --arg a "$2" '[.[] | select(.agentId == $a and (.status == "running" or .status == "queued"))] | length'
+}
+
+rig_pc_retire_tasks() {
+  # Cancels the open tasks with this title. After an instance restart Paperclip
+  # will not run the same task again (a wakeup is skipped as
+  # execution_reconciliation_required), so a stale worker task has to be replaced.
+  local company=$1 title=$2 ids id
+  ids=$(rig_pc_api GET "/api/companies/$company/issues?limit=100" |
+    jq -r --arg t "$title" '.[] | select(.title == $t and .status != "done" and .status != "cancelled") | .id') || return 1
+  for id in $ids; do
+    rig_pc_api PATCH "/api/issues/$id" '{"status": "cancelled"}' >/dev/null || return 1
+  done
+}
+
+rig_pc_seed_workers() {
+  # Each worker is a process agent that sleeps for an hour, so its run is live
+  # for as long as the rig is. Assigning a task starts a run. A worker with no
+  # live run gets a fresh task, which is how a seed after a check (which
+  # restarts the instance) brings the workers back; a second seed while they
+  # run changes nothing.
+  local company=$1 spec name title agent
+  for spec in "${RIG_SEED_WORKERS[@]}"; do
+    name=${spec%%|*}
+    title=${spec#*|}
+    agent=$(rig_pc_api GET "/api/companies/$company/agents" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].id // empty') ||
+      rig_die "seed: could not list agents"
+    [[ -n $agent ]] ||
+      agent=$(rig_pc_api POST "/api/companies/$company/agents" "$(jq -nc --arg n "$name" '{
+        name: $n, role: "engineer", adapterType: "process",
+        adapterConfig: {command: "sleep", args: ["3600"], timeoutSec: 0},
+        runtimeConfig: {heartbeat: {enabled: false}}}')" | jq -r '.id') ||
+      rig_die "seed: could not create agent $name"
+    (($(rig_pc_agent_live_runs "$company" "$agent") == 0)) || continue
+    rig_pc_retire_tasks "$company" "$title" || rig_die "seed: could not retire the old task '$title'"
+    rig_pc_api POST "/api/companies/$company/issues" "$(jq -nc --arg t "$title" --arg a "$agent" \
+      '{title: $t, status: "todo", assigneeAgentId: $a}')" >/dev/null ||
+      rig_die "seed: could not create task '$title'"
+  done
+
+  local deadline=$((SECONDS + 90))
+  while ((SECONDS < deadline)); do
+    (($(rig_pc_live_runs "$company") >= ${#RIG_SEED_WORKERS[@]})) && return 0
+    sleep 2
+  done
+  rig_die "seed: the worker agents have no live run after 90s"
+}
+
 rig_pc_seed() {
   rig_pc_healthy || rig_die "seed: the throwaway instance is not answering on $(rig_pc_api_base)"
   rig_guard_ports
   command -v psql >/dev/null 2>&1 || rig_die "seed: psql is needed for the failed-run row (Arch: postgresql package)"
 
-  local company agent task review question
+  local company agent task review blocked question
   rig_say "Seeding the throwaway instance at $(rig_pc_api_base)"
 
   company=$(rig_pc_api GET /api/companies | jq -r --arg n "$RIG_SEED_COMPANY" '[.[] | select(.name == $n)][0].id // empty') ||
@@ -238,26 +374,32 @@ rig_pc_seed() {
       runtimeConfig: {heartbeat: {enabled: false}}}')" | jq -r '.id') ||
     rig_die "seed: could not create the agent"
 
-  # The failing task: assigning it wakes the agent, the run fails, and the
-  # server blocks the task, which is the blocker row.
+  # The failing task: assigning it wakes the agent and the run fails.
   task=$(rig_seed_issue "$company" "Rig: failing task" \
     "$(jq -nc --arg a "$agent" '{status: "todo", assigneeAgentId: $a}')") ||
     rig_die "seed: could not create the failing task"
-  review=$(rig_seed_issue "$company" "Rig: waiting for review" \
-    '{"status":"in_review","assigneeUserId":"local-board"}') ||
-    rig_die "seed: could not create the review task"
-  question=$(rig_seed_issue "$company" "Rig: needs an answer" \
-    '{"status":"todo","assigneeUserId":"local-board"}') ||
-    rig_die "seed: could not create the question task"
+  local n
+  for ((n = 1; n <= RIG_SEED_PER_KIND; n++)); do
+    blocked=$(rig_seed_issue "$company" "Rig: blocked on you $n" \
+      '{"status":"blocked","unblockDescriptor":{"owner":"board","action":"Rig seed: pick the next step for this task."}}') ||
+      rig_die "seed: could not create blocked task $n"
+    review=$(rig_seed_issue "$company" "Rig: waiting for review $n" \
+      '{"status":"in_review","assigneeUserId":"local-board"}') ||
+      rig_die "seed: could not create review task $n"
+    question=$(rig_seed_issue "$company" "Rig: needs an answer $n" \
+      '{"status":"todo","assigneeUserId":"local-board"}') ||
+      rig_die "seed: could not create question task $n"
+    rig_pc_api POST "/api/issues/$question/interactions" "$(jq -nc --arg k "rig-seed:question:$n" --arg p "Rig question $n: which option?" '{
+      kind: "ask_user_questions", idempotencyKey: $k, continuationPolicy: "none",
+      payload: {version: 1,
+        questionSet: {schema: "paperclip.question_set.v1", questions: [
+          {id: "detail", prompt: $p, answerMode: "text", required: true}]},
+        questions: [{id: "detail", prompt: $p, selectionMode: "single",
+          required: true, options: [{id: "text", label: "Your answer", freeText: true}]}]}}')" >/dev/null ||
+      rig_die "seed: could not create interaction $n"
+  done
 
-  rig_pc_api POST "/api/issues/$question/interactions" '{
-    "kind": "ask_user_questions", "idempotencyKey": "rig-seed:question", "continuationPolicy": "none",
-    "payload": {"version": 1,
-      "questionSet": {"schema": "paperclip.question_set.v1", "questions": [
-        {"id": "detail", "prompt": "Rig question: which option?", "answerMode": "text", "required": true}]},
-      "questions": [{"id": "detail", "prompt": "Rig question: which option?", "selectionMode": "single",
-        "required": true, "options": [{"id": "text", "label": "Your answer", "freeText": true}]}]}}' >/dev/null ||
-    rig_die "seed: could not create the interaction"
+  rig_pc_seed_workers "$company"
 
   local deadline=$((SECONDS + 120)) run=""
   while ((SECONDS < deadline)); do
@@ -294,5 +436,16 @@ SQL
     fi
   done
   ((missing == 0)) || rig_die "seed: $missing inbox kind(s) missing; counts: $counts"
+
+  local rows live
+  rows=$(jq -r '.total // (.items | length) // 0' < <(rig_pc_api GET "/api/companies/$company/attention?limit=100")) ||
+    rig_die "seed: could not count the inbox rows"
+  ((rows >= RIG_SEED_MIN_ROWS)) ||
+    rig_die "seed: $rows inbox rows, need $RIG_SEED_MIN_ROWS; counts: $counts"
+  rig_ok "inbox has $rows rows (need $RIG_SEED_MIN_ROWS)"
+  live=$(rig_pc_live_runs "$company")
+  ((live >= ${#RIG_SEED_WORKERS[@]})) ||
+    rig_die "seed: $live live run(s), need ${#RIG_SEED_WORKERS[@]}"
+  rig_ok "$live agents have a live run"
   rig_ok "seeded company '$RIG_SEED_COMPANY' ($company): $(jq -c 'with_entries(select(.value > 0))' <<<"$counts")"
 }

@@ -38,6 +38,7 @@ Item {
   readonly property string serviceScript: pluginDir + "/bin/omarchy-paperclip-service"
   readonly property string webappScript: pluginDir + "/bin/omarchy-paperclip-webapp"
   readonly property string openScript: pluginDir + "/bin/omarchy-paperclip-open"
+  readonly property string notifyScript: pluginDir + "/bin/omarchy-paperclip-notify"
   readonly property string snoozeScript: pluginDir + "/bin/omarchy-paperclip-snooze"
 
   readonly property string notifyLevel: Model.normalizeNotifyLevel(setting("notifications", Model.NOTIFY_NEEDED))
@@ -71,9 +72,21 @@ Item {
   property string _lastMode: "awake"
   property bool _snoozeLoaded: false
 
+  // What the panel just asked the service to do ("start" or "stop") until the
+  // report shows it came true; and whether the first press of Stop on an
+  // instance with agents at work is waiting for its second.
+  property string servicePending: ""
+  property bool stopArmed: false
+  readonly property var serviceControl: Model.serviceControl(report, servicePending)
+  // The bar builds one copy of the plugin per screen, so nothing about "stopped
+  // by the owner" lives here: the service script keeps it in the state directory
+  // for every copy. A shell restart is a new session id, which ends it.
+  readonly property string shellSession: String(Quickshell.instanceId || ("pid" + Quickshell.processId))
+  property bool _wasUp: false
+  property double _lastAutoStartAsk: 0
+
   property var _seenKeys: ({})
   property var _previousReport: null
-  property double _lastStartAttempt: 0
 
   // Writes run one at a time through this queue. Clearing a group of thirteen
   // is thirteen calls, and thirteen agent runs starting at once is not a thing
@@ -142,20 +155,28 @@ Item {
     }
     _previousReport = parsed
     report = parsed
+    servicePending = Model.settlePending(servicePending, parsed)
+    if (servicePending === "") pendingTimer.stop()
+    if (serviceControl.action !== "stop") stopArmed = false
     maybeAutoStart()
   }
 
-  // One attempt per ten minutes: an instance that refuses to start must not
-  // turn into a restart loop nobody asked for.
+  // Every copy asks; bin/omarchy-paperclip-service autostart decides: it honours
+  // the stop marker, takes the start lock and allows one attempt per ten
+  // minutes for the whole shell. Asking is limited to once a minute per copy
+  // only to keep the script from running on every poll.
   function maybeAutoStart() {
-    if (!autoStart || instanceState !== "stopped") return
-    var service = report.service || {}
-    if (!service.installed) return
+    var step = Model.autoStartStep(_wasUp, report, autoStart, servicePending !== "" || serviceProcess.running)
+    _wasUp = step.wasUp
+    if (step.action === "mark-stopped") {
+      Util.execArgv([serviceScript, "mark-stopped", "--session", shellSession])
+      return
+    }
+    if (step.action !== "start") return
     var now = Date.now()
-    if (now - _lastStartAttempt < 600000) return
-    _lastStartAttempt = now
-    actionStatus = "Starting Paperclip…"
-    Util.execArgv([serviceScript, "start", "--quiet"])
+    if (now - _lastAutoStartAsk < 60000) return
+    _lastAutoStartAsk = now
+    Util.execArgv([serviceScript, "autostart", "--quiet", "--session", shellSession])
     settleTimer.restart()
   }
 
@@ -163,15 +184,15 @@ Item {
     if (!item) return
     // `omarchy-action` is the one app name Omarchy's Do Not Disturb lets
     // through, which is exactly what a focus session asks for.
-    var argv = ["omarchy-notification-send", "--app-name", quiet.bypass ? "omarchy-action" : "Paperclip",
-                "-u", String(item.urgency || "normal"),
-                // Every notification wears the mark: the words say what
-                // happened, the glyph says who is speaking.
-                "-g", String(item.glyph || Model.stateGlyph(root.instanceState)),
-                String(item.summary || "Paperclip"), String(item.body || "")]
-    var action = actionArgv(String(item.action || "open"), String(item.url || ""))
-    if (action.length > 0) argv = argv.concat(["--exec"]).concat(action)
-    Util.execArgv(argv)
+    // Every notification wears the mark: the words say what happened, the
+    // glyph says who is speaking. The words go to the helper on stdin and
+    // leave over D-Bus: they are never on a command line.
+    var request = Model.notificationRequest(item, quiet.bypass ? "omarchy-action" : "Paperclip",
+                                            Model.stateGlyph(root.instanceState),
+                                            actionArgv(String(item.action || "open"), String(item.url || "")))
+    var sender = notifyComponent.createObject(root, { payload: JSON.stringify(request) + "\n" })
+    sender.command = [notifyScript]
+    sender.running = true
   }
 
   // The argv a notification click (or a panel button) runs. Built as a vector
@@ -189,17 +210,21 @@ Item {
   // already there. A second window is only ever asked for by hand, by holding
   // Shift in the panel.
   function openArgv(url, newWindow) {
-    var argv = [openScript]
+    var argv = [openScript].concat(instanceArgv())
     if (newWindow) argv.push("--new-window")
     if (url) argv.push(String(url))
     return argv
   }
 
   function run(action, url) {
+    if (action === "start") {
+      startService()
+      return
+    }
     var argv = actionArgv(action, url || "")
     if (argv.length === 0) return
     Util.execArgv(argv)
-    if (action === "start" || action === "webapp") settleTimer.restart()
+    if (action === "webapp") settleTimer.restart()
   }
 
   function openUrl(url, newWindow) {
@@ -211,7 +236,77 @@ Item {
   function runSetup() { run("setup") }
   function runDoctor() { run("doctor") }
   function ensureWebapp() { run("webapp") }
-  function startInstance() { run("start") }
+  function startInstance() { startService() }
+
+  // ------------------------------------------------------- start and stop
+  //
+  // Both go through bin/omarchy-paperclip-service, which knows whether the
+  // instance is a background service or a terminal run. The panel offers only
+  // what Model.serviceControl says is possible, and the answer is read back
+  // from the probe, not assumed.
+
+  function startService() {
+    var control = serviceControl
+    if (control.action !== "start") return refuseService(control)
+    if (serviceProcess.running) return "busy"
+    stopArmed = false
+    beginService(true)
+    return "starting"
+  }
+
+  // Stopping an instance with agents at work asks once: the first call arms
+  // and returns "confirm", the second (within a few seconds) stops.
+  function stopService() {
+    var control = serviceControl
+    if (control.action !== "stop") return refuseService(control)
+    if (serviceProcess.running) return "busy"
+    if (control.confirm && !stopArmed) {
+      stopArmed = true
+      stopArmTimer.restart()
+      return "confirm"
+    }
+    stopArmed = false
+    stopArmTimer.stop()
+    beginService(false)
+    return "stopping"
+  }
+
+  // The one key and the one button: whatever the service can do right now.
+  function toggleService() {
+    var offered = serviceControl.action
+    if (offered === "start") return startService()
+    if (offered === "stop") return stopService()
+    return refuseService(serviceControl)
+  }
+
+  function refuseService(control) {
+    if (control.detail !== "") say(control.label + " — " + control.detail)
+    return control.state
+  }
+
+  function beginService(starting) {
+    servicePending = starting ? "start" : "stop"
+    pendingTimer.restart()
+    say(starting ? "Starting Paperclip…" : "Stopping Paperclip…")
+    serviceProcess.command = starting ? [serviceScript, "start", "--quiet", "--session", shellSession]
+                                      : [serviceScript, "stop", "--quiet", "--session", shellSession]
+    serviceProcess.running = true
+    settleTimer.restart()
+  }
+
+  function finishService(exitCode) {
+    if (exitCode === 0) {
+      refresh()
+      return
+    }
+    // The script said why on stderr; that sentence is the whole answer.
+    var complaint = String(serviceErr.text || "").split("\n")[0]
+      .replace(/\u001b\[[0-9;]*m/g, "").replace(/^==>\s*/, "").trim()
+    servicePending = ""
+    pendingTimer.stop()
+    say(complaint !== "" ? complaint : "The service script failed (exit " + exitCode + ")")
+    refresh()
+  }
 
   function restartInstance() {
     actionStatus = "Restarting Paperclip…"
@@ -622,12 +717,28 @@ Item {
     onTriggered: {
       ticks += 1
       root.refresh()
-      if (ticks >= 8) {
+      if (ticks >= (root.servicePending !== "" ? 30 : 8)) {
         ticks = 0
         running = false
         root.actionStatus = ""
       }
     }
+  }
+
+  Timer {
+    // A pending start or stop that the report never confirmed is not shown
+    // for ever.
+    id: pendingTimer
+    interval: Model.SERVICE_PENDING_MS
+    repeat: false
+    onTriggered: root.servicePending = ""
+  }
+
+  Timer {
+    id: stopArmTimer
+    interval: 6000
+    repeat: false
+    onTriggered: root.stopArmed = false
   }
 
   Timer {
@@ -644,6 +755,25 @@ Item {
     interval: 30
     repeat: false
     onTriggered: root.drain()
+  }
+
+  Component {
+    // One short-lived helper per notification; the words arrive on stdin.
+    id: notifyComponent
+    Process {
+      property string payload: ""
+      stdinEnabled: true
+      onStarted: write(payload)
+      onExited: destroy()
+    }
+  }
+
+  Process {
+    id: serviceProcess
+    running: false
+    command: []
+    stderr: StdioCollector { id: serviceErr; waitForEnd: true }
+    onExited: function(exitCode) { root.finishService(exitCode) }
   }
 
   Process {

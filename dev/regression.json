@@ -1,0 +1,11 @@
+{
+  "script": "dev/regression.sh",
+  "steps": "tests,rig,script",
+  "marketplace": true,
+  "owner_only": [
+    {"what": "Notification daemon and Do Not Disturb", "why": "The rig has no owner's notification daemon", "owner": "Checks it on their own desktop"},
+    {"what": "Bar and monitors", "why": "The rig has no owner's bar or monitors", "owner": "Checks it on their own desktop"},
+    {"what": "Board token on a remote instance", "why": "The rig has no real remote instance", "owner": "Checks it against a real remote instance"},
+    {"what": "Web app window in the browser", "why": "The rig does not open the owner's browser", "owner": "Checks it in their own browser"}
+  ]
+}

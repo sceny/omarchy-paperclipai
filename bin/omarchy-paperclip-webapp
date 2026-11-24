@@ -59,10 +59,14 @@ url=$(pc_api_base)
 icon=$PAPERCLIP_PLUGIN_DIR/assets/paperclipai.png
 state=$(pc_state_dir)
 
-# The instance serves its own icon; prefer it over the copy we ship.
-if curl -fsS --max-time 6 -o "$state/icon.png" "$url/apple-touch-icon.png" 2>/dev/null &&
-  [[ -s $state/icon.png ]]; then
+# The instance serves its own icon; prefer it over the copy we ship. It is
+# fetched only from a listener that is this user's own (or over https): a
+# foreign program on the port must not choose the launcher's icon.
+if pc_get /apple-touch-icon.png 6 >"$state/icon.png.part" && [[ -s $state/icon.png.part ]]; then
+  mv -f "$state/icon.png.part" "$state/icon.png"
   icon=$state/icon.png
+else
+  rm -f "$state/icon.png.part"
 fi
 
 say "Installing the $PAPERCLIP_WEBAPP_NAME web app for $url"

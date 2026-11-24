@@ -31,21 +31,49 @@ Panel {
   // hides the inbox.
   readonly property bool asleep: service.quiet.quiet
 
+  // The count the bubble shows, "" when it shows none. While one is up the
+  // bar slot is widened by a lane of its own, so the digits sit beside the
+  // mark and never on it.
+  readonly property string badgeLabel: service.showCount ? Model.badgeText(service.report) : ""
+  readonly property real badgeLane: !asleep && badgeLabel !== "" ? Style.space(10) : 0
+
+  // The lane as drawn. The slot and the mark's offset both follow this one
+  // value, so they glide together rather than the mark stepping first.
+  property real shownLane: badgeLane
+  Behavior on shownLane {
+    enabled: root.motion
+    NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+  }
+
   // Identical rows collapse into one, so a watchdog looping every fifteen
   // minutes reads as "Kai run failed ×115" rather than as a hundred rows.
-  readonly property var needGroups: Model.groupRows(service.report ? service.report.needs : [])
+  // The summary cards filter what the lists show, nothing else: the inbox
+  // setting, the bar's count and the cards' own numbers stay as they were.
+  property string cardFilter: ""
+  readonly property string activeFilter: Model.activeTileFilter(service.report, cardFilter)
+  onActiveFilterChanged: rowIndex = 0
+
+  readonly property var needGroups: Model.groupRows(
+    Model.filterNeedRows(service.report ? service.report.needs : [], activeFilter))
   readonly property int needsCap: 6
   property bool showAllRows: false
   readonly property var needs: showAllRows ? needGroups : needGroups.slice(0, needsCap)
-  readonly property var moving: service.report ? service.report.moving : []
-  readonly property var action: Model.primaryAction(service.report)
+  readonly property var moving: Model.filterMovingRows(service.report ? service.report.moving : [], activeFilter)
+  readonly property var action: Model.primaryAction(service.report, service.servicePending)
   readonly property int rowCount: needs.length + moving.length
   readonly property var tiles: Model.statTiles(service.report)
   // How many open rows this list does not reach. Named, never hidden: a list
   // that stops without saying so is how a number stops matching its list.
-  readonly property int moreWaiting: Model.moreWaiting(service.report, listedRows(needs))
+  readonly property int moreWaiting: Model.moreWaiting(service.report, listedRows(needs), activeFilter)
   // The probe's own complaints, shown under the button that acts on them.
   readonly property var problems: service.problems
+
+  // The probe's summary, then the Paperclip version as quiet trailing text.
+  readonly property string summaryLine: {
+    var text = service.report ? service.report.summary : "Checking…"
+    var version = service.report && service.report.health ? String(service.report.health.version || "") : ""
+    return version !== "" ? text + " · v" + version : text
+  }
 
   property bool cursorActive: false
   property int rowIndex: 0
@@ -146,7 +174,9 @@ Panel {
       cursorActive = false
       rowIndex = 0
       showAllRows = false
+      cardFilter = ""
       retryArmed = false
+      service.stopArmed = false
       service.clearNotes()
       if (panelFlick) panelFlick.contentY = 0
       service.refresh()
@@ -228,9 +258,17 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { service.refresh(); return "ok" }
+    function filterCard(key: string): string {
+      root.cardFilter = Model.toggleTileFilter(root.activeFilter, key)
+      return root.activeFilter === "" ? "none" : root.activeFilter
+    }
     function status(): string { return service.instanceState + " — " + (service.report ? service.report.summary : "") }
     function board(): string { service.openBoard(); return "ok" }
     function doctor(): string { service.runDoctor(); return "ok" }
+    function serviceState(): string { return service.serviceControl.state + (service.stopArmed ? " (confirm)" : "") }
+    function startService(): string { return service.startService() }
+    function stopService(): string { return service.stopService() }
+    function toggleService(): string { return service.toggleService() }
     function snooze(): string { service.toggleSnooze(false); return service.quiet.mode }
     function snoozeUntilMorning(): string { service.toggleSnooze(true); return service.quiet.mode }
     function focus(): string { service.toggleFocus(); return service.quiet.mode }
@@ -243,6 +281,7 @@ Panel {
     tooltipText: Model.tooltipText(service.report, service.quiet)
     active: !root.asleep && (service.attention > 0 || service.trouble)
     dimmed: root.asleep || service.instanceState === "idle" || service.instanceState === "unknown"
+    slotSize: Style.bar.iconSlot + root.shownLane
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) service.openBoard()
@@ -255,19 +294,40 @@ Panel {
     // motion — urgent when a person is needed, a light running along the wire
     // while agents work — so the shape itself never changes.
     iconComponent: Component {
-      PaperclipMark {
-        anchors.fill: parent
-        thickness: 24
-        color: root.markColor(service.tone)
-        motion: root.motion
-        working: !root.asleep && service.tone === "working"
-        attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+      // The loader resizes its root to the whole icon canvas, so the mark sits
+      // in a root of its own and keeps the size it asks for.
+      Item {
+        PaperclipMark {
+          // Sized from the stock bar icon font, like the glyph icons beside
+          // it, so the mark is as tall as they are rather than as tall as
+          // the whole icon canvas.
+          anchors.centerIn: parent
+          anchors.horizontalCenterOffset: -root.shownLane / 2
+          width: Style.bar.iconFont * 0.9
+          height: Style.bar.iconFont * 0.9
+          thickness: 24
+          color: root.markColor(service.tone)
+          motion: root.motion
+          working: !root.asleep && service.tone === "working"
+          attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
 
-        Behavior on color {
-          enabled: root.motion
-          ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+          Behavior on color {
+            enabled: root.motion
+            ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+          }
         }
       }
+    }
+
+    // The icon canvas the stock widgets draw in. The bubble and the zzz hang
+    // from its top edge, so they never rise above the icons beside them. The
+    // zzz reaches a little past its right edge, into the button's padding; a
+    // count sits in the lane the slot widens by (badgeLane).
+    Item {
+      id: iconBox
+      anchors.centerIn: parent
+      width: Style.bar.iconCanvas
+      height: Style.bar.iconCanvas
     }
 
     // While the plugin is quiet the bubble gives way to a zzz in the same
@@ -277,10 +337,9 @@ Panel {
       id: sleepMark
       visible: root.asleep
       textFormat: Text.PlainText
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.rightMargin: Style.space(1)
-      anchors.topMargin: Style.space(1)
+      anchors.right: iconBox.right
+      anchors.rightMargin: -Style.space(4)
+      anchors.top: iconBox.top
       text: Model.GLYPH_SLEEP
       color: root.bar ? root.bar.barForeground : root.foreground
       font.family: root.fontFamily
@@ -292,17 +351,22 @@ Panel {
     // simply busy, nothing at all when there is nothing to say.
     Rectangle {
       id: bubble
-      visible: !root.asleep && (badge.text !== "" || dotVisible)
-      readonly property bool dotVisible: badge.text === "" &&
+      visible: !root.asleep && (root.badgeLabel !== "" || dotVisible)
+      readonly property bool dotVisible: root.badgeLabel === "" &&
         (service.working > 0 || service.attention > 0 || service.trouble)
-      width: badge.text !== "" ? Math.max(Style.space(11), badge.implicitWidth + Style.space(5)) : Style.space(5)
-      height: badge.text !== "" ? Style.space(11) : Style.space(5)
+      // The ring is the bar's own background, so where the bubble overlaps
+      // the mark (it can, beside a two-digit count) an edge of bar shows
+      // between them, even when both are the urgent red.
+      readonly property int ring: 1
+      width: root.badgeLabel !== "" ? Math.max(height, badge.implicitWidth + Style.space(4) + 2 * ring) : Style.space(5) + 2 * ring
+      height: root.badgeLabel !== "" ? Style.space(12) + 2 * ring : Style.space(5) + 2 * ring
       radius: height / 2
       color: root.badgeUrgent ? root.urgent : (root.bar ? root.bar.barForeground : root.foreground)
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.rightMargin: Style.space(2)
-      anchors.topMargin: Style.space(3)
+      border.width: ring
+      border.color: root.bar ? root.bar.background : root.panelBackground
+      anchors.top: iconBox.top
+      x: root.badgeLabel !== "" ? button.width - width - Style.space(1)
+                                : iconBox.x + iconBox.width + Style.space(4) - width
 
       Behavior on color {
         enabled: root.motion
@@ -320,10 +384,11 @@ Panel {
       Text {
         id: badge
         anchors.centerIn: parent
-        text: service.showCount ? Model.badgeText(service.report) : ""
+        textFormat: Text.PlainText
+        text: root.badgeLabel
         color: root.bar ? root.bar.background : root.panelBackground
         font.family: root.fontFamily
-        font.pixelSize: Math.max(7, Style.font.caption - 2)
+        font.pixelSize: Math.max(8, Style.font.caption)
         font.bold: true
         renderType: Text.NativeRendering
 
@@ -370,7 +435,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(580))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight + Style.space(12) + footerBlock.implicitHeight, Style.space(580))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -391,6 +456,7 @@ Panel {
         if (lower === "r") service.refresh()
         else if (lower === "o") service.openBoard()
         else if (lower === "d") service.runDoctor()
+        else if (lower === "v") service.toggleService()
         else if (lower === "n") service.cycleNotifications()
         else if (lower === "z") service.toggleSnooze(k === "Z")
         else if (lower === "p") service.toggleFocus()
@@ -408,7 +474,11 @@ Panel {
 
       Flickable {
         id: panelFlick
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: footerBlock.top
+        anchors.bottomMargin: Style.space(12)
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
@@ -422,66 +492,67 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          PanelHero {
-            id: hero
+          Column {
             width: parent.width
-            title: "Paperclip"
-            meta: service.actionStatus !== "" ? service.actionStatus
-                                              : (service.report ? service.report.summary : "Checking…")
-            detail: service.report && service.report.health && service.report.health.version
-                      ? service.report.health.version : ""
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            iconOpacity: service.trouble ? 0.6 : 1.0
-            opacity: root.revealAt(0)
-            transform: Translate { y: root.revealLift(0) }
-            iconComponent: Component {
-              PaperclipMark {
-                implicitWidth: Style.space(30)
-                implicitHeight: Style.space(30)
-                thickness: 20
-                color: root.markColor(service.tone)
-                motion: root.motion && root.opened
-                working: !root.asleep && service.tone === "working"
-                attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+            spacing: Style.space(8)
 
-                Behavior on color {
-                  enabled: root.motion
-                  ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+            PanelHero {
+              id: hero
+              width: parent.width
+              title: "Paperclip"
+              meta: service.actionStatus !== "" ? service.actionStatus : root.summaryLine
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              iconOpacity: service.trouble ? 0.6 : 1.0
+              opacity: root.revealAt(0)
+              transform: Translate { y: root.revealLift(0) }
+              iconComponent: Component {
+                PaperclipMark {
+                  implicitWidth: Style.space(30)
+                  implicitHeight: Style.space(30)
+                  thickness: 20
+                  color: root.markColor(service.tone)
+                  motion: root.motion && root.opened
+                  working: !root.asleep && service.tone === "working"
+                  attention: !root.asleep && (service.tone === "attention" || service.tone === "alarm")
+
+                  Behavior on color {
+                    enabled: root.motion
+                    ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+                  }
                 }
               }
-            }
-            trailingControl: Component {
-              PanelActionButton {
-                iconText: Model.GLYPH_OPEN
-                tooltipText: "Open Paperclip — hold Shift for a new window"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: service.openBoard(shiftWatch.shiftHeld)
+              trailingControl: Component {
+                PanelActionButton {
+                  iconText: Model.GLYPH_OPEN
+                  tooltipText: "Open Paperclip — hold Shift for a new window"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: service.openBoard(shiftWatch.shiftHeld)
 
-                // The button's own clicked() carries no modifiers, so read them
-                // from the press and let it fall through to the button below.
-                MouseArea {
-                  id: shiftWatch
-                  property bool shiftHeld: false
-                  anchors.fill: parent
-                  acceptedButtons: Qt.LeftButton
-                  onPressed: function(mouse) {
-                    shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                    mouse.accepted = false
+                  // The button's own clicked() carries no modifiers, so read them
+                  // from the press and let it fall through to the button below.
+                  MouseArea {
+                    id: shiftWatch
+                    property bool shiftHeld: false
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton
+                    onPressed: function(mouse) {
+                      shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                      mouse.accepted = false
+                    }
                   }
                 }
               }
             }
 
             // A hairline under the hero that sweeps while the probe is
-            // running. Quieter than a spinner, and as a child of the hero it
-            // costs the column no space of its own.
+            // running. Quieter than a spinner. It has a row of its own, always
+            // reserved, so it can never overlap the title or the subtitle and
+            // the panel does not shift when it fades in.
             Item {
               id: sweepTrack
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
+              width: parent.width
               height: Style.space(2)
               opacity: service.refreshing && root.motion ? 1 : 0
               clip: true
@@ -513,6 +584,86 @@ Panel {
                   loops: Animation.Infinite
                   easing.type: Easing.InOutQuad
                 }
+              }
+            }
+          }
+
+          // ------------------------------------------------- the service
+          //
+          // Whether Paperclip itself is running, and the one button for it.
+          // The row is a fixed height, and the confirmation for stopping an
+          // instance with agents at work replaces its detail line in place,
+          // so asking never moves what is below.
+          Item {
+            id: serviceRow
+            readonly property var control: service.serviceControl
+            readonly property bool busy: control.state === "starting" || control.state === "stopping"
+            // The big card above the list already offers Start, and Enter
+            // reaches it; a second Start button would only repeat it.
+            readonly property bool cardOffersStart: control.action === "start" &&
+              root.action !== null && root.action.id === "start"
+            visible: control.state !== "unavailable"
+            width: parent.width
+            height: Style.space(26)
+            opacity: root.revealAt(1)
+            transform: Translate { y: root.revealLift(1) }
+
+            RowLayout {
+              anchors.fill: parent
+              anchors.leftMargin: Style.space(2)
+              spacing: Style.space(8)
+
+              Rectangle {
+                id: serviceDot
+                width: Style.space(6)
+                height: Style.space(6)
+                radius: width / 2
+                Layout.alignment: Qt.AlignVCenter
+                property real pulse: 0.9
+                color: serviceRow.control.state === "stopped" ? root.urgent : root.foreground
+                opacity: serviceRow.busy ? pulse : (serviceRow.control.state === "running" ? 0.9 : 0.65)
+
+                SequentialAnimation on pulse {
+                  running: root.motion && root.opened && serviceRow.busy
+                  loops: Animation.Infinite
+                  NumberAnimation { to: 0.25; duration: 700; easing.type: Easing.InOutQuad }
+                  NumberAnimation { to: 0.9; duration: 700; easing.type: Easing.InOutQuad }
+                }
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: serviceRow.control.label
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                Layout.alignment: Qt.AlignVCenter
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                text: service.stopArmed ? Model.stopConfirmText(serviceRow.control.working)
+                                        : serviceRow.control.detail
+                color: service.stopArmed ? root.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+
+              HeaderPill {
+                visible: serviceRow.control.action !== "" && !serviceRow.cardOffersStart
+                urgentPill: service.stopArmed
+                label: service.stopArmed ? "press again" : serviceRow.control.action
+                tooltip: service.stopArmed
+                  ? "Press again to stop Paperclip"
+                  : (serviceRow.control.action === "stop"
+                      ? "Stop the Paperclip service — press v"
+                      : "Start Paperclip — press v")
+                Layout.alignment: Qt.AlignVCenter
+                onClicked: service.toggleService()
               }
             }
           }
@@ -622,6 +773,8 @@ Panel {
                 required property var modelData
                 Layout.fillWidth: true
                 tile: modelData
+                selected: root.activeFilter === modelData.key
+                onClicked: root.cardFilter = Model.toggleTileFilter(root.activeFilter, modelData.key)
               }
             }
           }
@@ -713,7 +866,9 @@ Panel {
               spacing: Style.space(6)
 
               PanelSectionHeader {
-                text: "NEEDS YOU · " + service.inboxTotal
+                text: root.activeFilter === Model.TILE_FAILED
+                  ? "FAILED RUNS · " + Model.retryableCount(service.report)
+                  : "NEEDS YOU · " + service.inboxTotal
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 Layout.fillWidth: true
@@ -864,7 +1019,7 @@ Panel {
           // Nothing waiting and nothing running is a good state, so it gets
           // the mark and a sentence rather than an empty hole in the panel.
           Column {
-            visible: root.rowCount === 0 && !service.trouble && root.action === null
+            visible: root.rowCount === 0 && !service.trouble && root.action === null && root.activeFilter === ""
             width: parent.width
             spacing: Style.space(8)
             topPadding: Style.space(6)
@@ -892,85 +1047,93 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
             }
           }
+        }
+      }
 
-          PanelSeparator {
-            foreground: root.foreground
-            opacity: root.revealAt(5)
+      Column {
+        id: footerBlock
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        spacing: Style.space(12)
+
+        PanelSeparator {
+          foreground: root.foreground
+          opacity: root.revealAt(5)
+        }
+
+        // ---------------------------------------------------------- footer
+        RowLayout {
+          width: parent.width
+          spacing: Style.space(8)
+          opacity: root.revealAt(6)
+          transform: Translate { y: root.revealLift(6) }
+
+          // The keys this panel answers to, set as caps so they read as
+          // keys rather than as a sentence.
+          Flow {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            spacing: Style.space(6)
+
+            Repeater {
+              model: Model.hintKeys(service.report, service.quiet, service.servicePending)
+
+              KeyHint {
+                required property var modelData
+                hint: modelData
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "· " + Model.notificationLabel(service.notifyLevel)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
           }
 
-          // ---------------------------------------------------------- footer
-          RowLayout {
-            width: parent.width
-            spacing: Style.space(8)
-            opacity: root.revealAt(6)
-            transform: Translate { y: root.revealLift(6) }
+          PanelActionButton {
+            iconText: Model.GLYPH_SLEEP
+            tooltipText: service.quiet.mode === "plugin"
+              ? "Wake Paperclip — hold Shift to snooze until morning instead"
+              : "Snooze Paperclip for an hour — hold Shift to snooze until morning"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.toggleSnooze(snoozeShift.shiftHeld)
 
-            // The keys this panel answers to, set as caps so they read as
-            // keys rather than as a sentence.
-            Flow {
-              Layout.fillWidth: true
-              Layout.alignment: Qt.AlignVCenter
-              spacing: Style.space(6)
-
-              Repeater {
-                model: Model.hintKeys(service.report, service.quiet)
-
-                KeyHint {
-                  required property var modelData
-                  hint: modelData
-                }
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: "· " + Model.notificationLabel(service.notifyLevel)
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
+            MouseArea {
+              id: snoozeShift
+              property bool shiftHeld: false
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              onPressed: function(mouse) {
+                shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                mouse.accepted = false
               }
             }
+          }
 
-            PanelActionButton {
-              iconText: Model.GLYPH_SLEEP
-              tooltipText: service.quiet.mode === "plugin"
-                ? "Wake Paperclip — hold Shift to snooze until morning instead"
-                : "Snooze Paperclip for an hour — hold Shift to snooze until morning"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.toggleSnooze(snoozeShift.shiftHeld)
+          PanelActionButton {
+            iconText: Model.GLYPH_REFRESH
+            tooltipText: "Refresh"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            enabled: !service.refreshing
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.refresh()
+          }
 
-              MouseArea {
-                id: snoozeShift
-                property bool shiftHeld: false
-                anchors.fill: parent
-                acceptedButtons: Qt.LeftButton
-                onPressed: function(mouse) {
-                  shiftHeld = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                  mouse.accepted = false
-                }
-              }
-            }
-
-            PanelActionButton {
-              iconText: Model.GLYPH_REFRESH
-              tooltipText: "Refresh"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              enabled: !service.refreshing
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.refresh()
-            }
-
-            PanelActionButton {
-              iconText: Model.GLYPH_WRENCH
-              tooltipText: "Fix Paperclip with your agent"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              Layout.alignment: Qt.AlignVCenter
-              onClicked: service.runDoctor()
-            }
+          PanelActionButton {
+            iconText: Model.GLYPH_WRENCH
+            tooltipText: "Fix Paperclip with your agent"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            Layout.alignment: Qt.AlignVCenter
+            onClicked: service.runDoctor()
           }
         }
       }
@@ -1112,8 +1275,8 @@ Panel {
       hoverEnabled: true
       cursorShape: rowItem.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
       onEntered: root.setRowCursor(rowItem.rowOffset)
-      // Shift is the one way to ask for a second window; a plain click keeps
-      // working in the Paperclip window that is already open.
+      // A row's url opens in a window of its own, so the click always shows
+      // the item. Shift forces a window for the board url too.
       onClicked: function(mouse) {
         if (rowItem.row && rowItem.row.url)
           service.openUrl(rowItem.row.url, (mouse.modifiers & Qt.ShiftModifier) !== 0)
@@ -1319,25 +1482,60 @@ Panel {
     }
   }
 
-  // One of the three counts under the hero. A tile with something in it
-  // borrows that state's color; an empty one stays quiet chrome.
+  // One of the three counts under the hero, and a filter over the lists
+  // below it. A tile with something in it borrows that state's color and can
+  // be pressed; an empty one stays quiet chrome and does nothing.
   component StatTile: BorderSurface {
     id: statTile
     property var tile: null
+    property bool selected: false
     readonly property int value: tile ? Number(tile.value || 0) : 0
     readonly property color tone: root.toneColor(tile ? String(tile.tone) : "quiet")
+    readonly property bool pressable: value > 0
+    readonly property bool hovered: tileMouse.containsMouse
+
+    signal clicked()
 
     implicitHeight: tileColumn.implicitHeight + Style.space(16)
     radius: Style.cornerRadius
-    color: statTile.value > 0
-      ? Style.hoverFillFor(statTile.tone, statTile.tone)
-      : Style.normalFillFor(root.foreground, Color.accent)
-    borderSpec: Border.controlSpec("normal",
+    color: statTile.selected
+      ? Style.selectedFillFor(statTile.tone, statTile.tone)
+      : (statTile.value > 0
+        ? Style.hoverFillFor(statTile.tone, statTile.tone)
+        : Style.normalFillFor(root.foreground, Color.accent))
+    borderSpec: Border.controlSpec(
+      statTile.selected ? "selected" : (statTile.hovered ? "hover-cursor" : "normal"),
       statTile.value > 0 ? statTile.tone : root.foreground, Color.accent)
 
     Behavior on color {
       enabled: root.motion
       ColorAnimation { duration: 260; easing.type: Easing.OutCubic }
+    }
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.leftMargin: statTile.radius
+      anchors.rightMargin: statTile.radius
+      height: Style.space(2)
+      radius: height / 2
+      color: statTile.tone
+      opacity: statTile.selected ? 1 : 0
+
+      Behavior on opacity {
+        enabled: root.motion
+        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+      }
+    }
+
+    MouseArea {
+      id: tileMouse
+      anchors.fill: parent
+      hoverEnabled: statTile.pressable
+      enabled: statTile.pressable
+      cursorShape: statTile.pressable ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onClicked: statTile.clicked()
     }
 
     Column {
