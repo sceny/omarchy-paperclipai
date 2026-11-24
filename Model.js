@@ -746,44 +746,50 @@ function quietState(snooze, omarchyDnd, now) {
   return base
 }
 
+// Under the `All` filter the server's counts take in what you snoozed or
+// cleared. Count the listed rows still open instead; a cut list says so.
+function openListed(report, keep) {
+  var rows = Array.isArray(report.needs) ? report.needs : []
+  var count = 0
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].hidden !== true && keep(rows[i])) count++
+  }
+  return { count: count, more: toCount(report.inboxShown) < toCount(report.inboxTotal) }
+}
+
 // Said once when a timed snooze runs out by itself and rows are waiting. The
 // backlog is never replayed: one line, one click, then the panel is the list.
 // `Needs-me` counts only the decisions, the same rows it would have toasted.
 function wakeNotification(report, level) {
   var mode = normalizeNotifyLevel(level)
   if (mode === NOTIFY_OFF || !report) return null
+  var listed = report.inboxFilter === INBOX_ALL
   if (mode === NOTIFY_NEEDED) {
-    var decisions = decisionCount(report)
-    var more = false
-    // Under the `All` filter the server's counts take in what you snoozed or
-    // cleared. Count the listed rows still open instead; a cut list says so.
-    if (report.inboxFilter === INBOX_ALL) {
-      decisions = 0
-      var rows = Array.isArray(report.needs) ? report.needs : []
-      for (var i = 0; i < rows.length; i++) {
-        if (rows[i].hidden !== true && isDecisionKind(rows[i].kind)) decisions++
-      }
-      more = toCount(report.inboxShown) < toCount(report.inboxTotal)
-    }
-    if (decisions === 0) return null
+    var decisions = listed
+      ? openListed(report, function (row) { return isDecisionKind(row.kind) })
+      : { count: decisionCount(report), more: false }
+    if (decisions.count === 0) return null
     return {
       key: "snooze:over",
       urgency: "normal",
       glyph: GLYPH_PAPERCLIP,
       summary: "Snooze is over",
-      body: decisions === 1 && !more ? "1 decision waits for you."
-          : decisions + (more ? " or more" : "") + " decisions wait for you.",
+      body: decisions.count === 1 && !decisions.more ? "1 decision waits for you."
+          : decisions.count + (decisions.more ? " or more" : "") + " decisions wait for you.",
       action: "open"
     }
   }
-  var total = toCount(report.inboxTotal) || toCount(report.attention)
-  if (total === 0) return null
+  var total = listed
+    ? openListed(report, function () { return true })
+    : { count: toCount(report.inboxTotal) || toCount(report.attention), more: false }
+  if (total.count === 0) return null
   return {
     key: "snooze:over",
     urgency: "normal",
     glyph: GLYPH_PAPERCLIP,
     summary: "Snooze is over",
-    body: total === 1 ? "1 thing needs you." : total + " things need you.",
+    body: total.count === 1 && !total.more ? "1 thing needs you."
+        : total.count + (total.more ? " or more" : "") + " things need you.",
     action: "open"
   }
 }

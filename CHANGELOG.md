@@ -21,6 +21,9 @@ GitHub release with these notes.
 - **A row you snoozed or cleared raises no toast**, at any level, even while the
   `All` inbox filter lists it. When its snooze ends it is announced once, like
   any new row.
+- **"Snooze is over" at `Everything` no longer counts rows you snoozed or
+  cleared** while the `All` inbox filter lists them. When the list is cut, it
+  says "or more".
 
 ## 0.3.0 — 2026-11-05
 

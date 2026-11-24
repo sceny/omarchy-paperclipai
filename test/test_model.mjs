@@ -651,6 +651,30 @@ group("a snoozed or cleared row never toasts, and toasts once when it comes back
     Model.NOTIFY_NEEDED), null, "only snoozed decisions: nothing to say")
 })
 
+group("the snooze-over count at Everything leaves out what you snoozed or cleared", () => {
+  // Under `All` the server's total counts hidden rows too; they are not news.
+  const listed = {
+    inboxFilter: Model.INBOX_ALL, inboxTotal: 3, inboxShown: 3, attention: 3,
+    needs: [
+      { key: "a", kind: "approval", hidden: false },
+      { key: "b", kind: "failed_run", hidden: true },
+      { key: "c", kind: "issue_thread_interaction", hidden: true }
+    ]
+  }
+  assert.equal(Model.wakeNotification(listed, Model.NOTIFY_ALL).body, "1 thing needs you.")
+  // Every listed row hidden: nothing to say.
+  const allHidden = { ...listed, needs: listed.needs.map((r) => ({ ...r, hidden: true })) }
+  assert.equal(Model.wakeNotification(allHidden, Model.NOTIFY_ALL), null)
+  // A cut list cannot know what lies past it, so it says "or more".
+  const cut = { ...listed, inboxTotal: 9 }
+  assert.equal(Model.wakeNotification(cut, Model.NOTIFY_ALL).body, "1 or more things need you.")
+  const cutTwo = { ...cut, needs: listed.needs.map((r) => ({ ...r, hidden: false })) }
+  assert.equal(Model.wakeNotification(cutTwo, Model.NOTIFY_ALL).body, "3 or more things need you.")
+  // Under `Needs-me` the server already leaves hidden rows out of its total.
+  assert.equal(Model.wakeNotification({ ...cut, inboxFilter: Model.INBOX_NEEDS_ME }, Model.NOTIFY_ALL).body,
+    "9 things need you.")
+})
+
 group("text from the instance is inert in a notification", () => {
   const WJ = "\u2060"
   for (const hostile of ["--app-name=x", "-u", "--image=/x", "--exec", "-r", "  --replace-id=4"]) {
