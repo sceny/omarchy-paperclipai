@@ -16,6 +16,12 @@ GitHub release with these notes.
   raise a toast at this level; they stay in the panel and the bar count, and
   `Everything` still announces them. The stored setting is unchanged.
 
+### Fixes
+
+- **A row you snoozed or cleared raises no toast**, at any level, even while the
+  `All` inbox filter lists it. When its snooze ends it is announced once, like
+  any new row.
+
 ## 0.3.0 — 2026-11-05
 
 ### Highlights

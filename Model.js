@@ -754,13 +754,25 @@ function wakeNotification(report, level) {
   if (mode === NOTIFY_OFF || !report) return null
   if (mode === NOTIFY_NEEDED) {
     var decisions = decisionCount(report)
+    var more = false
+    // Under the `All` filter the server's counts take in what you snoozed or
+    // cleared. Count the listed rows still open instead; a cut list says so.
+    if (report.inboxFilter === INBOX_ALL) {
+      decisions = 0
+      var rows = Array.isArray(report.needs) ? report.needs : []
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].hidden !== true && isDecisionKind(rows[i].kind)) decisions++
+      }
+      more = toCount(report.inboxShown) < toCount(report.inboxTotal)
+    }
     if (decisions === 0) return null
     return {
       key: "snooze:over",
       urgency: "normal",
       glyph: GLYPH_PAPERCLIP,
       summary: "Snooze is over",
-      body: decisions === 1 ? "1 decision waits for you." : decisions + " decisions wait for you.",
+      body: decisions === 1 && !more ? "1 decision waits for you."
+          : decisions + (more ? " or more" : "") + " decisions wait for you.",
       action: "open"
     }
   }
@@ -802,6 +814,7 @@ function diffNotifications(previous, next, level, seen) {
   if (!previous) {
     out.seen = mergeKeys(out.seen, keysOf(next.needs))
     out.seen = mergeKeys(out.seen, keysOf(next.moving))
+    out.seen = forgetHidden(out.seen, next)
     return out
   }
 
@@ -847,9 +860,12 @@ function diffNotifications(previous, next, level, seen) {
   // moving to `Everything` later does not replay it.
   var freshErrors = []
   var freshDecisions = []
+  // A row you snoozed or cleared is not shown, whatever the level. The `All`
+  // inbox filter lists it so it can be found, never so it can toast; it stays
+  // unseen, so a snooze that ends is one toast, the way the reminder it is.
   for (var i = 0; i < next.needs.length; i++) {
     var row = next.needs[i]
-    if (out.seen[row.key]) continue
+    if (row.hidden === true || out.seen[row.key]) continue
     if (!all) {
       if (isDecisionKind(row.kind)) freshDecisions.push(row)
     } else if (isErrorKind(row.kind) || row.isError === true) freshErrors.push(row)
@@ -924,7 +940,7 @@ function diffNotifications(previous, next, level, seen) {
 
   out.seen = mergeKeys(out.seen, keysOf(next.needs))
   out.seen = mergeKeys(out.seen, keysOf(next.moving))
-  out.seen = pruneKeys(out.seen, next)
+  out.seen = forgetHidden(pruneKeys(out.seen, next), next)
   return out
 }
 
@@ -974,6 +990,15 @@ function mergeKeys(seen, keys) {
   for (var a in seen) out[a] = true
   for (var b in keys) out[b] = true
   return out
+}
+
+// A snoozed or cleared row is never counted as seen: when it comes back it is
+// news again, under either inbox filter.
+function forgetHidden(seen, report) {
+  for (var i = 0; i < report.needs.length; i++) {
+    if (report.needs[i].hidden === true) delete seen[report.needs[i].key]
+  }
+  return seen
 }
 
 // Forget rows that are gone, so the same task notifies again if it comes back.
