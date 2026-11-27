@@ -28,7 +28,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          python3 dev/public-text-check 2>&1 | tee "$RUNNER_TEMP/public-text.txt"
+          python3 dev/public-text-check --time-limit 240 2>&1 | tee "$RUNNER_TEMP/public-text.txt"
       - name: Tell a person that a push to develop broke the rules
         if: failure()
         env:
