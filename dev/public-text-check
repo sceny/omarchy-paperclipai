@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The company's rules for public text, checked by a script.
 
-A pull request's public text is its body, every comment, every review and every
-review comment. Three checks read it, with their patterns in
+A pull request's public text is its title, body, every comment, every review and
+every review comment; an issue's is its title, body and every comment. Three checks read it, with their patterns in
 dev/public-text-rules.json (the environment check reads HTML comments too, since
 they are public in the text's source):
 
@@ -11,9 +11,10 @@ they are public in the text's source):
   unlinked-reference       names another repository's issue without its owner
 
   dev/public-text-check --pr 123 [--repo owner/name]   read the pull request (GITHUB_TOKEN)
+  dev/public-text-check --issue 45 [--repo owner/name] read the issue (GITHUB_TOKEN)
   dev/public-text-check                                inside Actions: the event's pull request (a merge
-                                                       group's too), or on a push the commits it brings and
-                                                       the pull requests it touched
+                                                       group's too) or issue, or on a push the commits it
+                                                       brings and the pull requests it touched
   dev/public-text-check --fixture file.json            read {"changed_files": [...], "texts": [...]}
   dev/public-text-check --standing                     the same rules on the standing texts
   dev/public-text-check --twin                         this checker and its rules against the twin
@@ -360,6 +361,17 @@ def read_pull_request(repo, number, token, commits=True):
     return {"changed_files": files, "texts": texts}
 
 
+def read_issue(repo, number, token):
+    """An issue's title, body and comments, read as a pull request's are; it changes no files."""
+    base = "/repos/%s" % repo
+    issue = api("%s/issues/%d" % (base, number), token)
+    texts = [{"url": issue["html_url"], "body": issue["title"], "kind": "title"},
+             {"url": issue["html_url"], "body": issue.get("body"), "kind": "body"}]
+    for item in api("%s/issues/%d/comments?per_page=100" % (base, number), token):
+        texts.append({"url": item["html_url"], "body": item.get("body"), "kind": "comment"})
+    return {"changed_files": [], "texts": texts}
+
+
 WORKERS = 8
 NO_COMMIT = re.compile(r"^0+$")
 
@@ -447,6 +459,13 @@ def pull_request_number(event):
     return int(group.group(1)) if group else None
 
 
+def issue_number(event):
+    """The issue an event is about when it is not a pull request: an issue opened or
+    edited, or a comment on one."""
+    issue = event.get("issue") or {}
+    return None if issue.get("pull_request") else issue.get("number")
+
+
 def shared_rules(rules):
     """The rules without the lines that are each repository's own (LOCAL_RULES)."""
     def walk(value, top=False):
@@ -504,8 +523,9 @@ def check_twin(rules, token, checker_path=__file__, rules_path=RULES_FILE):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Public text of a pull request against the company's rules.")
+    parser = argparse.ArgumentParser(description="Public text of a pull request or an issue against the company's rules.")
     parser.add_argument("--pr", type=int)
+    parser.add_argument("--issue", type=int)
     parser.add_argument("--repo")
     parser.add_argument("--fixture")
     parser.add_argument("--standing", action="store_true")
@@ -546,15 +566,18 @@ def main(argv=None):
         problems = check_pull_request(rules, doc) + check_public_files(rules)
         what = "public text"
     else:
-        event = read_event()
-        is_push = os.environ.get("GITHUB_EVENT_NAME") == "push" and not args.pr
+        event = {} if args.pr or args.issue else read_event()
+        is_push = os.environ.get("GITHUB_EVENT_NAME") == "push" and not (args.pr or args.issue)
         number = args.pr or pull_request_number(event)
-        if not token or not (number or is_push):
-            print("public-text-check: give --pr (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
+        issue = None if number else args.issue or issue_number(event)
+        if not token or not (number or issue or is_push):
+            print("public-text-check: give --pr or --issue (and GITHUB_TOKEN), --fixture or --standing", file=sys.stderr)
             return 2
         try:
             if is_push:
                 problems = check_push(rules, repo, event, token, deadline)
+            elif issue:
+                problems = check_pull_request(rules, read_issue(repo, issue, token))
             else:
                 doc = read_pull_request(repo, number, token)
                 problems = check_pull_request(rules, doc) + check_public_files(rules)
@@ -564,8 +587,8 @@ def main(argv=None):
                   "the text is not checked. Run the job again." % (args.time_limit, done, total, what), file=sys.stderr)
             return 2
         except (urllib.error.URLError, KeyError, ValueError) as error:
-            print("public-text-check: could not read the %s: %s" % ("push" if is_push else "pull request", type(error).__name__),
-                  file=sys.stderr)
+            print("public-text-check: could not read the %s: %s" % ("push" if is_push else "issue" if issue else "pull request",
+                                                                    type(error).__name__), file=sys.stderr)
             return 2
         what = "public text"
 
