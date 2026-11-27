@@ -255,6 +255,13 @@ at the call catches the next variant.
    Check: [`test/test_process_lists.py`](../../test/test_process_lists.py),
    [`test/test_doctor_session.mjs`](../../test/test_doctor_session.mjs),
    [`test/test_transport.py`](../../test/test_transport.py).
+11. **Workflows hold no more access than they need, and no event text reaches a script.**
+   No workflow runs on `pull_request_target` or `workflow_run`. The top-level
+   `permissions` are read-only, and a job's write scope is on the reviewed list in
+   the test with its reason. A `${{ github.event.* }}`, `github.head_ref` or
+   `inputs.*` value is read through `env:`, never inside a `run:` line. Each
+   `uses:` is pinned to a commit or a tag.
+   Check: [`test/test_workflows.py`](../../test/test_workflows.py).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a
