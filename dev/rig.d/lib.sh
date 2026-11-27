@@ -27,7 +27,6 @@ rig_die() {
 
 RIG_HOST_HOME=$HOME
 RIG_HOST_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-RIG_HOST_WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
 RIG_HOST_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 RIG_HOST_HYPR_SIG=${HYPRLAND_INSTANCE_SIGNATURE:-}
 
@@ -468,7 +467,6 @@ rig_load_state() {
   RIG_HTTP_PORT=$(rig_state_get http_port || echo "")
   RIG_PG_PORT=$(rig_state_get pg_port || echo "")
   RIG_INSTANCE_ID=$(rig_state_get instance_id || echo "$RIG_DEFAULT_INSTANCE_ID")
-  RIG_VIEW=$(rig_state_get view || echo hidden)
   RIG_SHELL_PID=$(rig_state_get shell_pid || echo "")
   RIG_HYPR_PID=$(rig_state_get hypr_pid || echo "")
   RIG_PARENT_PID=$(rig_state_get parent_pid || echo "")

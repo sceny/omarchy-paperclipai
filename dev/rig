@@ -2,17 +2,16 @@
 # Isolated test rig for Sceny's Omarchy shell plugins.
 #
 # Usage:
-#   dev/rig up [--visible] [--ttl SECONDS] [--owner PID|none]
-#                                        bring the rig up, hidden, and leave it running
+#   dev/rig up [--ttl SECONDS] [--owner PID|none]
+#                                        bring the rig up and leave it running
 #   dev/rig down                         tear it down and prove nothing is left
 #   dev/rig ci [--evidence DIR]          up, run every check, tear down (one command)
 #   dev/rig check                        run the checks against a running rig
 #   dev/rig status                       what is running, and where
-#   dev/rig screenshot [file.png]        capture the nested shell (works hidden)
+#   dev/rig screenshot [file.png]        capture the nested shell
 #   dev/rig seed                         one inbox row of each kind, and live worker runs
 #   dev/rig install                      add and enable the plugin on the bar (check starts without it)
 #   dev/rig restart-shell                restart only the nested shell (after a .js change)
-#   dev/rig show | hide                  put the rig on the owner's screen / take it off again
 #   dev/rig ps [--json]                  every live rig: owner, age, time left
 #   dev/rig reap [--dry-run]             end every rig whose owner is gone or whose TTL is up
 #   dev/rig adopt [--owner PID|none] [--ttl SECONDS]
@@ -21,17 +20,15 @@
 #   dev/rig exec -- <command...>         run a command inside the rig sandbox
 #   dev/rig verify-clean                 prove no rig has left anything behind
 #   dev/rig probe -- <command...>        one-off probe in a private runtime dir, cores off
-#   dev/rig selftest                     test the lease, keeper, ps and reap (no compositor needed)
+#   dev/rig selftest                     test the lease, keeper, ps, reap and seed lookups (no compositor)
 #   dev/rig --rig <id> <command>         act on one named rig (a part of the id is enough)
 #
 # What it guarantees, and why it exists:
 #
-#   * HIDDEN BY DEFAULT. The Omarchy shell under test runs in its own Hyprland,
-#     inside a headless Wayland parent (labwc). Nothing is mapped on any monitor
-#     of the owner's session: no window on their workspaces, no moved or
-#     retiled windows, no stolen focus. Screenshots and shell IPC work while
-#     hidden. A window appears only on `dev/rig show` (or `up --visible`), and
-#     only the owner asks for that: an agent or CI run is refused.
+#   * HIDDEN. The Omarchy shell under test runs in its own Hyprland, inside a
+#     headless Wayland parent (labwc). Nothing is mapped on any monitor of the
+#     owner's session: no window on their workspaces, no moved or retiled
+#     windows, no stolen focus. Screenshots and shell IPC work the same way.
 #   * NO ZOMBIES. A rig has one owner process and a TTL. When the owner ends,
 #     crashes or is killed, or the TTL is up, the compositor, shell, Paperclip
 #     instance, Postgres and temp dirs go. `dev/rig ps` lists every rig,
@@ -130,11 +127,9 @@ rig_on_signal() {
 }
 
 cmd_up() {
-  local view=hidden ttl=${RIG_TTL:-$RIG_DEFAULT_TTL}
+  local ttl=${RIG_TTL:-$RIG_DEFAULT_TTL}
   while (($#)); do
     case $1 in
-    --visible) view=visible ;;
-    --hidden) view=hidden ;;
     --ttl)
       ttl=${2:?--ttl needs seconds}
       shift
@@ -148,10 +143,9 @@ cmd_up() {
     shift
   done
   [[ $ttl =~ ^[0-9]+$ ]] || rig_die "up: --ttl needs a whole number of seconds"
-  [[ $view == visible ]] && rig_refuse_unrequested_visible
 
   rig_require_tools
-  [[ $view == visible ]] || rig_require_headless_parent
+  rig_require_headless_parent
   rig_ensure_root
   reap_dead_rigs_quietly
 
@@ -167,7 +161,6 @@ cmd_up() {
   local session
   session=$(rig_new_session_dir)
   rig_define_paths "$session"
-  RIG_VIEW=$view
   RIG_TTL=$ttl
   RIG_HYPR_PID="" RIG_PARENT_PID="" RIG_SHELL_PID="" RIG_INSTANCE_PID="" RIG_NESTED_DISPLAY=""
   RIG_INSTANCE_ID=$RIG_DEFAULT_INSTANCE_ID
@@ -175,13 +168,12 @@ cmd_up() {
   RIG_PG_PORT=0
   rig_guard_sandbox
 
-  rig_say "Bringing up the rig for $RIG_PLUGIN_ID ($RIG_VIEW)"
+  rig_say "Bringing up the rig for $RIG_PLUGIN_ID"
   rig_create_sandbox
   trap rig_up_cleanup_on_failure EXIT
   trap rig_on_signal INT TERM
 
   rig_state_set plugin_id "$RIG_PLUGIN_ID"
-  rig_state_set view "$RIG_VIEW"
   rig_state_set instance_id "$RIG_INSTANCE_ID"
   rig_state_set source "$RIG_PLUGIN_SRC_ABS"
   rig_lease_init "$owner" "$ttl"
@@ -233,10 +225,10 @@ cmd_up() {
   cat >&2 <<INFO
 
   Next:
-    dev/rig install                add the plugin to the bar
-    dev/rig seed                   a busy panel: live runs and inbox rows
     dev/rig check                  run the checks (they expect no plugin yet)
-    dev/rig screenshot shot.png    capture the shell (works while hidden)
+    dev/rig install                a hand check: add the plugin to the bar (use a rig of its own)
+    dev/rig seed                   a busy panel: live runs and inbox rows
+    dev/rig screenshot shot.png    capture the shell
     dev/rig exec -- omarchy plugin list
     dev/rig down                   tear it down
 
@@ -344,7 +336,6 @@ cmd_status() {
     printf '  rig         %s\n' "$RIG_ID"
     printf '  plugin      %s\n' "$(rig_state_get plugin_id || echo "$RIG_PLUGIN_ID")"
     printf '  source      %s\n' "$(rig_state_get source || echo '?')"
-    printf '  view        %s\n' "$RIG_VIEW"
     printf '  owner       %s pid %s\n' "$(rig_state_get owner_name || echo '-')" "$(rig_state_get owner_pid || echo none)"
     printf '  lease       %s, ttl %s\n' "$(rig_lease_state "$RIG_SESSION")" "$(rig_fmt_duration "$(rig_state_get ttl || echo 0)")"
     printf '  session     %s\n' "$RIG_SESSION"
@@ -409,7 +400,6 @@ cmd_ci() {
   local out="$RIG_DIR/../.rig-evidence" up_args=()
   while (($#)); do
     case $1 in
-    --visible) up_args+=(--visible) ;;
     --ttl)
       up_args+=(--ttl "${2:?--ttl needs seconds}")
       shift
@@ -492,37 +482,8 @@ cmd_screenshot() {
   local out=${1:-$RIG_EVIDENCE/nested-shell.png}
   rig_grim_wait "$out" || rig_die "grim failed"
   [[ -s $out ]] || rig_die "grim wrote an empty file"
-  rig_ok "wrote $out ($(stat -c %s "$out") bytes, $RIG_VIEW view)"
+  rig_ok "wrote $out ($(stat -c %s "$out") bytes)"
   printf '%s\n' "$out"
-}
-
-# --------------------------------------------------------------- show/hide ----
-
-cmd_view() {
-  # cmd_view <hidden|visible> — move the rig's compositor and shell to another
-  # parent. HOME, the installed plugin and the Paperclip instance are not
-  # touched, so the rig comes back as it was, in a different place.
-  local target=$1
-  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
-  [[ $target == visible ]] && rig_refuse_unrequested_visible
-  if [[ $RIG_VIEW == "$target" ]]; then
-    rig_ok "the rig is already $target"
-    return 0
-  fi
-  rig_export_env
-  rig_guard_sandbox
-
-  rig_say "Moving the rig from $RIG_VIEW to $target"
-  rig_stop_display
-  RIG_VIEW=$target
-  rig_state_set view "$target"
-  rig_start_compositor
-  rig_start_shell
-  if [[ $target == visible ]]; then
-    rig_ok "the rig is a window of the owner's session now; 'dev/rig hide' takes it away"
-  else
-    rig_ok "the rig is hidden again"
-  fi
 }
 
 # ----------------------------------------------------------- restart-shell ----
@@ -585,7 +546,13 @@ cmd_install() {
     rig_record_settled install-enable 0 omarchy plugin enable "$RIG_PLUGIN_ID" "$RIG_BAR_SECTION" ||
       rig_die "install: 'omarchy plugin enable' failed; see $RIG_EVIDENCE/install-enable.log"
   fi
-  rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar"
+
+  local deadline=$((SECONDS + 5))
+  until timeout 3 omarchy-shell paperclip status >/dev/null 2>&1; do
+    ((SECONDS < deadline)) || rig_die "install: the panel did not answer 'omarchy-shell paperclip status' within 5 seconds"
+    sleep 1
+  done
+  rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar; the panel answers over IPC"
 }
 
 # ------------------------------------------------------------------- adopt ----
@@ -669,8 +636,6 @@ ci) cmd_ci "$@" ;;
 check) cmd_check "$@" ;;
 status) cmd_status "$@" ;;
 screenshot) cmd_screenshot "$@" ;;
-show) cmd_view visible ;;
-hide) cmd_view hidden ;;
 restart-shell) cmd_restart_shell "$@" ;;
 seed) cmd_seed "$@" ;;
 install) cmd_install "$@" ;;

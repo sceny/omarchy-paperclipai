@@ -2,13 +2,10 @@
 # The plugin's own checks for dev/regression, run in the candidate's tree after
 # `dev/rig up` with SANDBOX_OUT set. Writes $SANDBOX_OUT/features.tsv and each
 # row's evidence beside it. Every row is measured here; none is assumed.
+# `dev/regression.sh --self-check` runs the verdicts on planted states, without a rig.
 
 set -u
 
-OUT_DIR="${SANDBOX_OUT:?SANDBOX_OUT is set by dev/sandbox run}"
-mkdir -p "$OUT_DIR"
-TSV="$OUT_DIR/features.tsv"
-printf 'feature\trule\thow\tresult\tevidence\n' >"$TSV"
 work=$(mktemp -d)
 cold_pid=""
 
@@ -25,6 +22,65 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fixture=test/fixtures/snooze-v0.2.0.json
+
+# verdict_read_back GET OUT: pass when GET prints the fixture's exact bytes.
+verdict_read_back() {
+  local get=$1 out=$2
+  if "$get" >"$out" 2>"$out.err" && [[ $(sha256sum <"$out") == "$(sha256sum <"$fixture")" ]]; then
+    echo pass
+  else
+    echo fail
+  fi
+}
+
+# verdict_read_only GET STATE: pass when two reads leave STATE's bytes unchanged.
+verdict_read_only() {
+  local get=$1 state_file=$2 before
+  before=$(sha256sum <"$state_file")
+  if "$get" >/dev/null 2>&1 && "$get" >/dev/null 2>&1 &&
+    [[ -n $before && $before == "$(sha256sum <"$state_file")" ]]; then
+    echo pass
+  else
+    echo fail
+  fi
+}
+
+self_check() {
+  local state_file="$work/self/omarchy/paperclipai/snooze.json" bad=0
+  mkdir -p "$(dirname "$state_file")"
+
+  changed_get() { jq '.until += 1' "$fixture"; }
+  rewriting_get() { printf ' ' >>"$state_file"; cat "$fixture"; }
+  reading_get() { cat "$fixture"; }
+  expect() {
+    if [[ $2 == "$1" ]]; then
+      echo "ok     $3"
+    else
+      echo "WRONG  $3: want $1, got $2" >&2
+      bad=1
+    fi
+  }
+
+  cp "$fixture" "$state_file"
+  expect fail "$(verdict_read_back changed_get "$work/changed.out")" "a changed value fails read back"
+  expect pass "$(verdict_read_back reading_get "$work/read.out")" "the fixture passes read back"
+  expect fail "$(verdict_read_only rewriting_get "$state_file")" "a read that rewrites the file fails read only"
+  cp "$fixture" "$state_file"
+  expect pass "$(verdict_read_only reading_get "$state_file")" "a read that writes nothing passes read only"
+  return "$bad"
+}
+
+if [[ ${1:-} == --self-check ]]; then
+  self_check
+  exit $?
+fi
+
+OUT_DIR="${SANDBOX_OUT:?SANDBOX_OUT is set by dev/sandbox run}"
+mkdir -p "$OUT_DIR"
+TSV="$OUT_DIR/features.tsv"
+printf 'feature\trule\thow\tresult\tevidence\n' >"$TSV"
+
 failed=0
 
 # The sandbox brings the rig up with no owner, so the rig is found by its id.
@@ -36,7 +92,6 @@ row() { printf '%s\t%s\t%s\t%s\t%s\n' "$@" >>"$TSV"; }
 
 state="$work/state"
 snooze="$state/omarchy/paperclipai/snooze.json"
-fixture=test/fixtures/snooze-v0.2.0.json
 mkdir -p "$(dirname "$snooze")"
 cp "$fixture" "$snooze"
 
@@ -44,21 +99,12 @@ snooze_get() {
   dev/rig exec -- env XDG_STATE_HOME="$state" bin/omarchy-paperclip-snooze get
 }
 
-read_back=fail
-if snooze_get >"$OUT_DIR/snooze-get.out" 2>"$OUT_DIR/snooze-get.err" &&
-  [[ $(sha256sum <"$OUT_DIR/snooze-get.out") == "$(sha256sum <"$fixture")" ]]; then
-  read_back=pass
-fi
+read_back=$(verdict_read_back snooze_get "$OUT_DIR/snooze-get.out")
 [[ $read_back == pass ]] || failed=1
 row "Snooze from the live tag" "A state the live tag wrote reads back unchanged" \
   "snooze get on the v0.2.0 writer's file" "$read_back" "snooze-get.out"
 
-before=$(sha256sum <"$snooze")
-unchanged=fail
-if snooze_get >/dev/null 2>&1 && snooze_get >/dev/null 2>&1 &&
-  [[ -n $before && $before == "$(sha256sum <"$snooze")" ]]; then
-  unchanged=pass
-fi
+unchanged=$(verdict_read_only snooze_get "$snooze")
 [[ $unchanged == pass ]] || failed=1
 row "Snooze read is not a write" "Reading the state writes nothing" \
   "the file's hash before and after two reads" "$unchanged" "snooze-get.out"

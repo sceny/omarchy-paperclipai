@@ -6,7 +6,7 @@
                                                   fix-X.Y.Z from origin/main
 
 Both set "version" in manifest.json and commit it with CHANGELOG.md, so the
-`release` check on the pull request into develop or main passes at once.
+`release` check on the pull request into main passes at once.
 
 From develop, `## Unreleased` (which must hold entries) becomes
 `## X.Y.Z — YYYY-MM-DD`. From main there is no Unreleased section: a new
