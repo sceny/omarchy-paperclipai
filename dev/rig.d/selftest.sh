@@ -176,6 +176,39 @@ st_instance_cases() {
   st_check "the timing file says the instance is gone" st_kept_has "$scratch" 'stop: the instance is gone'
 }
 
+st_ci_beside() {
+  # st_ci_beside <live rig id> <scratch> — `dev/rig --rig <live> ci`, the way
+  # the sandbox calls it while its own rig is up. Up and check stand in (no
+  # compositor); down is the real one. Up ends on `status`, as the real one does.
+  local live=$1 scratch=$2
+  (
+    RIG_SELECT=$live
+    cmd_up() {
+      rig_load_state "$RIG_TMP_ROOT/$(st_fake_rig "$RIG_OWNER_PID" 600)" || return 1
+      printf '%s\n' "$RIG_ID" >"$scratch/ci-up"
+      cmd_status >/dev/null 2>&1
+    }
+    cmd_check() { rig_select && printf '%s\n' "$RIG_ID" >"$scratch/ci-checked"; }
+    cmd_ci --evidence "$scratch/ci-evidence"
+  ) >/dev/null 2>&1
+}
+
+st_ci_cases() {
+  local scratch=$1 live
+  rig_say "ci beside a live rig runs on its own rig"
+  live=$(st_fake_rig none 600)
+  st_check "ci passes with another rig up" st_ci_beside "$live" "$scratch"
+  st_check "ci brought up a rig of its own" st_expr '[[ -s $scratch/ci-up && $(<"$scratch/ci-up") != "$live" ]]'
+  st_check "ci checked its own rig" st_expr '[[ $(<"$scratch/ci-checked") == $(<"$scratch/ci-up") ]]'
+  st_check "ci tore its own rig down" st_gone "$(<"$scratch/ci-up")"
+  st_check "the live rig is still there" st_expr '[[ -d $RIG_TMP_ROOT/$live ]]'
+  st_check "the live rig's processes still run" st_some_of "$live"
+  (
+    RIG_SELECT=$live
+    rig_select && rig_teardown >/dev/null 2>&1
+  )
+}
+
 cmd_selftest() {
   local scratch
   scratch=$(mktemp -d "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-selftest.XXXXXX")
@@ -268,6 +301,7 @@ cmd_selftest() {
   st_check "verify-clean passes with no rigs" cmd_verify_clean
 
   st_instance_cases "$scratch"
+  st_ci_cases "$scratch"
 
   # The stand-in owners and anything else this test started.
   kill "$owner_a" "$owner_b" 2>/dev/null || true
