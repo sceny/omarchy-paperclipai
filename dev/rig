@@ -10,7 +10,10 @@
 #   dev/rig status                       what is running, and where
 #   dev/rig screenshot [file.png]        capture the nested shell
 #   dev/rig seed                         one inbox row of each kind, and live worker runs
-#   dev/rig install                      add and enable the plugin on the bar (check starts without it)
+#   dev/rig install [--tree DIR]         add and enable the plugin on the bar (check starts without it);
+#                                        --tree installs DIR's package instead (a release to upgrade from)
+#   dev/rig upgrade                      the checkout as the package's next commit, then the user's
+#                                        `omarchy plugin update`; restart the shell after
 #   dev/rig restart-shell                restart only the nested shell (after a .js change)
 #   dev/rig ps [--json]                  every live rig: owner, age, time left
 #   dev/rig reap [--dry-run]             end every rig whose owner is gone or whose TTL is up
@@ -525,6 +528,17 @@ cmd_seed() {
 cmd_install() {
   # Puts the plugin on the bar, for a screenshot or a panel check by hand. The
   # install is the one `check` makes; `check` starts from a rig without the plugin.
+  local tree=""
+  while (($#)); do
+    case $1 in
+    --tree)
+      tree=${2:?--tree needs a directory}
+      shift
+      ;;
+    *) rig_die "install: unknown option $1" ;;
+    esac
+    shift
+  done
   rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
   rig_export_env
   rig_guard_sandbox
@@ -532,6 +546,13 @@ cmd_install() {
   rig_guard_nested_shell
   rig_guard_no_host_systemd
   rig_guard_stubs
+
+  if [[ -n $tree ]]; then
+    tree=$(cd -- "$tree" && pwd) || rig_die "install: --tree $tree is not a directory"
+    [[ ! -e $RIG_PLUGINS_DIR/$RIG_PLUGIN_ID ]] ||
+      rig_die "install: $RIG_PLUGIN_ID is already installed; --tree installs only on a rig without it"
+    rig_build_package_repo "$tree"
+  fi
 
   if [[ -f $RIG_PLUGINS_DIR/$RIG_PLUGIN_ID/manifest.json ]]; then
     rig_ok "$RIG_PLUGIN_ID is already installed"
@@ -553,6 +574,37 @@ cmd_install() {
     sleep 1
   done
   rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar; the panel answers over IPC"
+}
+
+# ------------------------------------------------------------------ upgrade ----
+
+cmd_upgrade() {
+  # The upgrade a user gets: the checkout lands as one new commit on the
+  # package repo the install was cloned from, and `omarchy plugin update`
+  # fast-forwards the installed clone to it and validates it. The shell keeps
+  # the code it read at start until `dev/rig restart-shell`.
+  (($# == 0)) || rig_die "upgrade: takes no argument"
+  rig_select || rig_die "no rig for this owner; run 'dev/rig up' first"
+  rig_export_env
+  rig_guard_sandbox
+  rig_guard_nested_display
+  rig_guard_nested_shell
+  rig_guard_no_host_systemd
+  rig_guard_stubs
+
+  local dir=$RIG_PLUGINS_DIR/$RIG_PLUGIN_ID before after want
+  [[ -d $dir/.git ]] || rig_die "upgrade: $RIG_PLUGIN_ID is not installed from git; run 'dev/rig install --tree DIR' first"
+  before=$(git -C "$dir" rev-parse HEAD) || rig_die "upgrade: cannot read the installed commit"
+  rig_commit_package_tree "$RIG_PLUGIN_SRC_ABS"
+  want=$(git -C "$RIG_PKG_REPO" rev-parse HEAD) || rig_die "upgrade: cannot read the package commit"
+  rig_record install-upgrade 0 omarchy plugin update "$RIG_PLUGIN_ID" --yes ||
+    rig_die "upgrade: 'omarchy plugin update' failed; see $RIG_EVIDENCE/install-upgrade.log"
+  after=$(git -C "$dir" rev-parse HEAD)
+  [[ $after == "$want" ]] ||
+    rig_die "upgrade: the installed clone is at ${after:0:12}, not the package's ${want:0:12}"
+  [[ -z $(git -C "$dir" status --porcelain 2>/dev/null) ]] ||
+    rig_die "upgrade: the installed clone has changes the package does not"
+  rig_ok "$RIG_PLUGIN_ID upgraded from ${before:0:12} to ${after:0:12}; restart the shell to load it"
 }
 
 # ------------------------------------------------------------------- adopt ----
@@ -639,6 +691,7 @@ screenshot) cmd_screenshot "$@" ;;
 restart-shell) cmd_restart_shell "$@" ;;
 seed) cmd_seed "$@" ;;
 install) cmd_install "$@" ;;
+upgrade) cmd_upgrade "$@" ;;
 ps) cmd_ps "$@" ;;
 reap) cmd_reap "$@" ;;
 adopt) cmd_adopt "$@" ;;

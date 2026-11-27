@@ -101,8 +101,8 @@ snooze_get() {
 
 read_back=$(verdict_read_back snooze_get "$OUT_DIR/snooze-get.out")
 [[ $read_back == pass ]] || failed=1
-row "Snooze from the live tag" "A state the live tag wrote reads back unchanged" \
-  "snooze get on the v0.2.0 writer's file" "$read_back" "snooze-get.out"
+row "Snooze from the v0.2.0 fixture" "A state the v0.2.0 writer wrote reads back unchanged" \
+  "snooze get on the v0.2.0 writer's file (test/fixtures)" "$read_back" "snooze-get.out"
 
 unchanged=$(verdict_read_only snooze_get "$snooze")
 [[ $unchanged == pass ]] || failed=1
@@ -163,17 +163,96 @@ row "Cold install" "A cold computer's setup brings Paperclip up and reads no sno
   "setup --yes in an empty HOME, service, web app, widget and skills off; health answers before it is stopped" \
   "$cold_result" "setup.log"
 
-install_result=pass
-dev/rig install >"$OUT_DIR/install.log" 2>&1 || install_result=fail
-dev/rig restart-shell >>"$OUT_DIR/install.log" 2>&1 || install_result=fail
-[[ $install_result == pass ]] || failed=1
-row "Plugin installs and enables" "The plugin is added and on the bar in the rig" \
-  "dev/rig install, then restart the shell" "$install_result" "install.log"
+# The rig's own HOME and state directory, where its shell installs and writes.
+installed="$(dev/rig exec -- printenv HOME)/.config/omarchy/plugins/sceny.paperclipai"
+version_of() { jq -r '.version // empty' "$1/manifest.json" 2>/dev/null; }
+
+# The upgrade a user makes: the live tag installed as a user installs it, its
+# own panel writing its state, then `omarchy plugin update` to the candidate.
+# SANDBOX_BASE is the live tag's tree (`dev/sandbox run --base`, which
+# dev/regression passes when dev/regression.json asks for it).
+if [[ -n ${SANDBOX_BASE:-} && -f $SANDBOX_BASE/manifest.json ]]; then
+  base_version=$(version_of "$SANDBOX_BASE")
+  base_name="v$base_version (${SANDBOX_BASE_SHA:0:12})"
+  live_state="$(dev/rig exec -- printenv XDG_STATE_HOME)/omarchy/paperclipai/snooze.json"
+
+  live_install=pass
+  {
+    [[ ! -e $live_state ]] || { echo "a snooze state is there before the install: $live_state"; false; }
+  } >"$OUT_DIR/live-install.log" 2>&1 || live_install=fail
+  dev/rig install --tree "$SANDBOX_BASE" >>"$OUT_DIR/live-install.log" 2>&1 || live_install=fail
+  dev/rig restart-shell >>"$OUT_DIR/live-install.log" 2>&1 || live_install=fail
+  [[ -n $base_version && $(version_of "$installed") == "$base_version" ]] || live_install=fail
+  [[ $live_install == pass ]] || failed=1
+  row "Live tag installs" "The live tag installs as a user installs it and is on the bar" \
+    "dev/rig install --tree with $base_name, restart the shell, the installed manifest is its version" \
+    "$live_install" "live-install.log"
+
+  # The live tag's own panel writes the state, through its own IPC and writer.
+  live_write=fail
+  mode=$(dev/rig exec -- timeout 5 omarchy-shell paperclip snooze 2>"$OUT_DIR/live-snooze.err")
+  for _ in $(seq 20); do [[ -s $live_state ]] && break; sleep 0.5; done
+  cp "$live_state" "$OUT_DIR/live-snooze.json" 2>/dev/null
+  if [[ $mode == plugin ]] && jq -e '.step == "1h" and .until > 0' "$live_state" >/dev/null 2>&1; then
+    live_write=pass
+  fi
+  [[ $live_write == pass ]] || failed=1
+  row "Live tag writes its state" "The live tag's panel snoozes and its writer keeps the state" \
+    "omarchy-shell paperclip snooze on $base_name: mode '$mode', snooze.json a one-hour snooze" \
+    "$live_write" "live-snooze.json"
+  before=$(sha256sum <"$live_state" 2>/dev/null)
+
+  upgrade=pass
+  dev/rig upgrade >"$OUT_DIR/upgrade.log" 2>&1 || upgrade=fail
+  dev/rig restart-shell >>"$OUT_DIR/upgrade.log" 2>&1 || upgrade=fail
+  [[ $(version_of "$installed") == "$(version_of .)" ]] || upgrade=fail
+  [[ $upgrade == pass ]] || failed=1
+  row "Upgrade from the live tag" "omarchy plugin update takes the live tag's install to the candidate" \
+    "dev/rig upgrade from $base_name (the candidate as the package's next commit, omarchy plugin update --yes), restart the shell, the installed manifest is the candidate's version" \
+    "$upgrade" "upgrade.log"
+
+  kept=fail
+  [[ -n $before && $before == "$(sha256sum <"$live_state" 2>/dev/null)" ]] && kept=pass
+  [[ $kept == pass ]] || failed=1
+  row "Upgrade keeps the state" "The upgrade and the candidate's start leave the live tag's state as it was" \
+    "snooze.json's hash before the upgrade and after the shell restart" "$kept" "live-snooze.json"
+
+  # Focus with Omarchy awake only answers the mode and writes nothing, so it is
+  # asked until the candidate's panel has read the state at its start.
+  read_state=fail
+  dev/rig exec -- "$installed/bin/omarchy-paperclip-snooze" get >"$OUT_DIR/upgrade-snooze-get.out" 2>"$OUT_DIR/upgrade-snooze-get.err"
+  mode=""
+  for _ in $(seq 15); do
+    mode=$(dev/rig exec -- timeout 5 omarchy-shell paperclip focus 2>/dev/null)
+    [[ $mode == plugin ]] && break
+    sleep 1
+  done
+  printf 'panel mode: %s\n' "$mode" >>"$OUT_DIR/upgrade-snooze-get.out"
+  if [[ $(head -1 "$OUT_DIR/upgrade-snooze-get.out") == "$(jq -c . "$OUT_DIR/live-snooze.json" 2>/dev/null)" ]] &&
+    [[ $mode == plugin && $before == "$(sha256sum <"$live_state" 2>/dev/null)" ]]; then
+    read_state=pass
+  fi
+  [[ $read_state == pass ]] || failed=1
+  row "Candidate reads the live tag's state" "The upgraded writer and panel read the snooze the live tag wrote, and write nothing" \
+    "the installed snooze get prints the live tag's file; the panel's mode is 'plugin'; the hash is unchanged" \
+    "$read_state" "upgrade-snooze-get.out"
+else
+  failed=1
+  row "Upgrade from the live tag" "omarchy plugin update takes the live tag's install to the candidate" \
+    "needs the live tag's tree in SANDBOX_BASE (dev/sandbox run --base)" "fail" "features.tsv"
+
+  install_result=pass
+  dev/rig install >"$OUT_DIR/install.log" 2>&1 || install_result=fail
+  dev/rig restart-shell >>"$OUT_DIR/install.log" 2>&1 || install_result=fail
+  [[ $install_result == pass ]] || failed=1
+  row "Plugin installs and enables" "The plugin is added and on the bar in the rig" \
+    "dev/rig install, then restart the shell" "$install_result" "install.log"
+fi
 
 loaded=pass
-dev/rig exec -- dev/loaded-code . >"$OUT_DIR/loaded-code.log" 2>&1 || loaded=fail
+dev/rig exec -- dev/loaded-code "$installed" >"$OUT_DIR/loaded-code.log" 2>&1 || loaded=fail
 [[ $loaded == pass ]] || failed=1
-row "Panel runs the files" "The running shell has the plugin's IPC functions of the files" \
-  "dev/loaded-code" "$loaded" "loaded-code.log"
+row "Panel runs the files" "The running shell has the IPC functions of the installed plugin's files" \
+  "dev/loaded-code on the installed folder" "$loaded" "loaded-code.log"
 
 exit "$failed"

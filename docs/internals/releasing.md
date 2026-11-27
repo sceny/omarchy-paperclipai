@@ -473,14 +473,26 @@ user's one step, and no package is asked for twice. Each step is a row with its
 evidence, and what the rig cannot prove goes on the *needs the owner's setup*
 list.
 
-**Upgrade.** The live tag's own snooze writer makes the state an older install
-leaves; it is kept as `test/fixtures/snooze-v0.2.0.json` and regenerated only
-when the writer's format changes. The candidate's `snooze get` reads it back
-unchanged, and reading it writes nothing. This checks the state the tag left,
-not the tag's code running an upgrade: a live-tag install in the sandbox is not
-automated yet. Then `dev/loaded-code` checks that the shell answers over IPC
-with the candidate's files: a QML error takes the whole widget off the bar, and
-it can be logged after a quick log check has already passed.
+**Upgrade.** `dev/regression.json` asks for the live tag (`"upgrade_from":
+"live-tag"`), so `dev/regression` gives the run the commit of the latest
+release as a second read-only archive (`dev/sandbox run --base`), and the script
+finds its tree in `$SANDBOX_BASE`. The script installs it as a user does
+(`dev/rig install --tree`), restarts the shell, and has that release's own panel
+snooze through its IPC, so its own writer leaves the state. Then `dev/rig
+upgrade` puts the candidate on the package repo as its next commit and runs
+`omarchy plugin update --yes`, the user's upgrade, and the shell is restarted.
+The rows: the live tag installs at its version; it writes a one-hour snooze;
+the upgrade lands the candidate's version; the upgrade and the candidate's
+start leave the state's bytes as they were; the candidate's `snooze get` prints
+them and its panel reads the snooze (`focus` with Omarchy awake answers the
+mode and writes nothing). A run without the base fails the upgrade row. Then
+`dev/loaded-code` checks that the shell answers over IPC with the installed
+files: a QML error takes the whole widget off the bar, and it can be logged
+after a quick log check has already passed.
+
+The rows *Snooze from the v0.2.0 fixture* and *Snooze read is not a write* read
+`test/fixtures/snooze-v0.2.0.json`, the state the v0.2.0 writer made, and are
+kept while users may still hold it.
 
 Each result is a row of the regression record.
 

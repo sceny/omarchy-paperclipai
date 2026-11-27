@@ -663,43 +663,69 @@ rig_verify_clean() {
 
 # ---------------------------------------------------------- plugin paths ----
 
-rig_build_package_repo() {
-  # Package parity: a real user runs `omarchy plugin add <git-url>`, which
-  # clones, validates, then moves the clone into place. So the rig installs
-  # from a git repo too — a local one built out of the checkout, so the same
-  # clone/validate/move path runs without needing anything published.
-  rm -rf "$RIG_PKG_REPO"
-  mkdir -p "$RIG_PKG_REPO"
-  local path
-  if git -C "$RIG_PLUGIN_SRC_ABS" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    # In a git checkout the package is what the repo ships: every tracked or
-    # not-ignored file, symlinks kept as symlinks. A hand-picked list hid a
-    # symlink that `omarchy plugin add` refuses; this cannot.
-    git -C "$RIG_PLUGIN_SRC_ABS" ls-files -z --cached --others --exclude-standard |
-      tar -C "$RIG_PLUGIN_SRC_ABS" --null --ignore-failed-read -T - -cf - 2>/dev/null |
-      tar -C "$RIG_PKG_REPO" -xf - ||
-      rig_die "could not copy the git-tracked tree of $RIG_PLUGIN_SRC_ABS"
+rig_copy_package_tree() {
+  # rig_copy_package_tree <src> <dest>: the files a package of <src> holds.
+  # In a git checkout the package is what the repo ships: every tracked or
+  # not-ignored file, symlinks kept as symlinks. A hand-picked list hid a
+  # symlink that `omarchy plugin add` refuses; this cannot.
+  local src=$1 dest=$2 path
+  if git -C "$src" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$src" ls-files -z --cached --others --exclude-standard |
+      tar -C "$src" --null --ignore-failed-read -T - -cf - 2>/dev/null |
+      tar -C "$dest" -xf - ||
+      rig_die "could not copy the git-tracked tree of $src"
   else
     for path in "${RIG_PACKAGE_PATHS[@]}"; do
-      if [[ -e "$RIG_PLUGIN_SRC_ABS/$path" ]]; then
-        cp -r "$RIG_PLUGIN_SRC_ABS/$path" "$RIG_PKG_REPO/"
+      if [[ -e "$src/$path" ]]; then
+        cp -r "$src/$path" "$dest/"
       else
         rig_warn "package path missing in checkout, skipped: $path"
       fi
     done
   fi
-  [[ -f $RIG_PKG_REPO/manifest.json ]] ||
-    rig_die "no manifest.json in the package built from $RIG_PLUGIN_SRC_ABS"
+  [[ -f $dest/manifest.json ]] ||
+    rig_die "no manifest.json in the package built from $src"
+}
+
+rig_build_package_repo() {
+  # rig_build_package_repo [src]: the package repo, one commit of <src>
+  # (default the checkout).
+  # Package parity: a real user runs `omarchy plugin add <git-url>`, which
+  # clones, validates, then moves the clone into place. So the rig installs
+  # from a git repo too — a local one built out of the checkout, so the same
+  # clone/validate/move path runs without needing anything published.
+  local src=${1:-$RIG_PLUGIN_SRC_ABS}
+  rm -rf "$RIG_PKG_REPO"
+  mkdir -p "$RIG_PKG_REPO"
+  rig_copy_package_tree "$src" "$RIG_PKG_REPO"
 
   (
     cd "$RIG_PKG_REPO" || exit 1
     git init -q -b main
     git -c user.email=rig@localhost -c user.name=rig add -A
     git -c user.email=rig@localhost -c user.name=rig \
-      commit -q -m "rig package of $RIG_PLUGIN_ID"
+      commit -q -m "rig package of $RIG_PLUGIN_ID from $src"
   ) >>"$RIG_LOGS/package.log" 2>&1 || rig_die "could not build the package repo"
 
-  rig_ok "package repo built: $RIG_PKG_REPO"
+  rig_ok "package repo built from $src: $RIG_PKG_REPO"
+}
+
+rig_commit_package_tree() {
+  # rig_commit_package_tree <src>: the package repo's next commit holds <src>'s
+  # package and nothing of the one before, the way a release reaches a user's
+  # `omarchy plugin update`: one new commit on the branch their clone follows.
+  local src=$1
+  [[ -d $RIG_PKG_REPO/.git ]] || rig_die "no package repo at $RIG_PKG_REPO"
+  find "$RIG_PKG_REPO" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + ||
+    rig_die "could not empty the package repo"
+  rig_copy_package_tree "$src" "$RIG_PKG_REPO"
+  (
+    cd "$RIG_PKG_REPO" || exit 1
+    git -c user.email=rig@localhost -c user.name=rig add -A
+    git -c user.email=rig@localhost -c user.name=rig \
+      commit -q --allow-empty -m "rig package of $RIG_PLUGIN_ID from $src"
+  ) >>"$RIG_LOGS/package.log" 2>&1 || rig_die "could not commit $src to the package repo"
+  rig_ok "package repo has $src as its next commit"
 }
 
 rig_plugin_installed() {

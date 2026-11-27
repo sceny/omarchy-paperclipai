@@ -211,6 +211,8 @@ dev/rig ci                     # up, run every check, tear down, verify. One com
 dev/rig up                     # bring the rig up and leave it running
 dev/rig check                  # run the checks against the running rig
 dev/rig install                # add and enable the plugin on the bar (for a panel by hand)
+dev/rig install --tree DIR     # install DIR's package instead: a release to upgrade from
+dev/rig upgrade                # the checkout as the package's next commit, then `omarchy plugin update`
 dev/rig screenshot shot.png    # capture the nested shell
 dev/rig seed                   # inbox rows of each kind, and two live worker runs
 dev/rig restart-shell          # restart only the nested shell; needed after a .js change
