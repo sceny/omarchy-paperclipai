@@ -174,6 +174,10 @@ git rev-parse origin/develop^{tree}
   `develop`'s: a fix to the release run works from the release that carries it.
   0.3.0 was cut before the merge above existed, so its run only warned and
   `develop` was brought level by hand.
+- A back-merge made by hand (a conflict the run cannot merge) is on a branch
+  named `merge-main-X.Y.Z-into-develop`, never a task's branch: GitHub's merge
+  message names the head branch, and `develop`'s `public-text` check reads that
+  message.
 - Tested in `test/test_release_head.py`, which builds the case in a throwaway
   repository: the commit that fails on `develop` passes on the release head.
 

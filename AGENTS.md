@@ -270,6 +270,10 @@ in order; the detail, the checklist and the record templates are in
    gh release create vX.Y.Z --title "Paperclip X.Y.Z" --notes-file notes.md --verify-tag --latest
    ```
 
+   A back-merge of `main` into `develop` made by hand is on a branch named
+   `merge-main-X.Y.Z-into-develop`, never a task's branch (`docs/internals/releasing.md`,
+   *The release head*).
+
 4. **Request the marketplace review** (`omacom/omarchy-plugin-marketplace`)
    once the release is published and the owner has said go for the request
    (1d), with the text below as it stands. It is filed from a session, not

@@ -1029,5 +1029,79 @@ class Workflow(unittest.TestCase):
             self.assertNotRegex(expression, r"\.(body|title|head\.ref|head\.label|message|name)\b", expression)
 
 
+class DevelopNotice(unittest.TestCase):
+    """The notice step's script, run with a stub gh: a merge queue is a bot, which no issue can be assigned to."""
+    REPO = "sceny/omarchy-paperclipai"
+    SHA = "a90607f3a855a223ed9a02cb6cbec7f82f6bd7e3"
+
+    def step(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "develop-notice.yml")) as handle:
+            lines = handle.read().splitlines()
+        start = next(i for i, line in enumerate(lines) if "- name: Tell a person" in line)
+        run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+        body = []
+        for line in lines[run + 1:]:
+            if line.strip() and not line.startswith(" " * 10):
+                break
+            body.append(line[10:])
+        return "\n".join(body) + "\n"
+
+    def run_step(self, actor, lookup="", lookup_fails=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.mkdir(bin_dir)
+            calls = os.path.join(tmp, "calls")
+            answer = os.path.join(tmp, "answer")
+            with open(answer, "w") as handle:
+                handle.write(lookup)
+            lookup_exit = "1" if lookup_fails else "0"
+            with open(os.path.join(bin_dir, "gh"), "w") as handle:
+                handle.write("#!/bin/sh\n"
+                             "printf '%s\\n' \"$*\" >> \"$CALLS\"\n"
+                             "if [ \"$1\" = api ]; then cat \"$ANSWER\"; exit " + lookup_exit + "; fi\n"
+                             "exit 0\n")
+            os.chmod(os.path.join(bin_dir, "gh"), 0o755)
+            script = os.path.join(tmp, "step.sh")
+            with open(script, "w") as handle:
+                handle.write(self.step())
+            env = {
+                "PATH": bin_dir + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+                "RUNNER_TEMP": tmp,
+                "CALLS": calls,
+                "ANSWER": answer,
+                "ACTOR": actor,
+                "GITHUB_REPOSITORY": self.REPO,
+                "GITHUB_SHA": self.SHA,
+                "COMMIT_URL": "https://github.com/%s/commit/%s" % (self.REPO, self.SHA),
+                "RUN_URL": "https://github.com/%s/actions/runs/1" % self.REPO,
+            }
+            with open(os.path.join(tmp, "public-text.txt"), "w") as handle:
+                handle.write("FAIL public-text-environment [home-path] https://example.test/c/1\n")
+            result = subprocess.run(["/bin/bash", script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(calls) as handle:
+                return handle.read().splitlines()
+
+    def test_a_person_who_pushed_is_the_assignee(self):
+        calls = self.run_step("someone")
+        self.assertEqual(len(calls), 1, calls)
+        self.assertTrue(calls[0].endswith("--assignee someone"), calls)
+
+    def test_a_merge_queue_push_is_assigned_the_pull_requests_author(self):
+        calls = self.run_step("github-merge-queue[bot]", lookup="example-author")
+        self.assertTrue(calls[0].startswith("api repos/%s/commits/%s/pulls" % (self.REPO, self.SHA)), calls)
+        self.assertTrue(calls[-1].endswith("--assignee example-author"), calls)
+
+    def test_a_merge_queue_push_with_no_person_is_filed_unassigned(self):
+        calls = self.run_step("github-merge-queue[bot]", lookup="")
+        self.assertEqual(len(calls), 2, calls)
+        self.assertNotIn("--assignee", calls[-1])
+
+    def test_a_failed_lookup_is_filed_unassigned(self):
+        calls = self.run_step("github-merge-queue[bot]", lookup='{"message": "Not Found"}', lookup_fails=True)
+        self.assertEqual(len(calls), 2, calls)
+        self.assertNotIn("--assignee", calls[-1])
+
+
 if __name__ == "__main__":
     unittest.main()

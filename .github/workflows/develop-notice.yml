@@ -60,4 +60,15 @@ jobs:
             echo
             echo "$ending"
           } > "$body"
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" --assignee "$ACTOR"
+          assignee="$ACTOR"
+          # A merge queue is a bot, which no issue can be assigned to: assign the merged pull request's author.
+          if [[ "$ACTOR" == *'[bot]' ]]; then
+            assignee="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.user.type == "User")][0].user.login // ""')" || assignee=""
+          fi
+          assign=()
+          if [ -n "$assignee" ]; then
+            assign=(--assignee "$assignee")
+          else
+            echo "::warning::No person to assign the notice to; it is filed without an assignee"
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" "${assign[@]}"
