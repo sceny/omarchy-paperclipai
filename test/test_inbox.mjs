@@ -692,6 +692,54 @@ await group("a list the probe could not fetch is flagged, not read as empty", as
   assert.equal(redacted.runsStale, false)
 })
 
+// An id goes into a request path only in the server's own shape. One with a
+// `/`, `?`, `#` or `..` would send the token's request elsewhere on the instance.
+const BAD_IDS = ["a/b", "../wakeup", "..", "a.b", "x:y", "a?b=1", "a#b", "a%2Fb", "a b", "a\nb", "x".repeat(81)]
+
+await group("an id that is not an id never reaches a request path", async () => {
+  for (const bad of BAD_IDS) {
+    seen = []
+    const calls = [
+      ["dismiss", "--company", bad, "--item-key", "attention:run:x"],
+      ["restore", "--company", bad, "--item-key", "attention:run:x"],
+      ["snooze", "--company", bad, "--item-key", "attention:run:x", "--hours", "1"],
+      ["retry-all", "--company", bad],
+      ["clear-failed", "--company", bad],
+      ["retry", "--company", COMPANY, "--kind", "run", "--agent", bad, "--run", "run-1"],
+      ["retry", "--company", COMPANY, "--kind", "recovery", "--issue", bad, "--action", "act-1"],
+    ]
+    for (const args of calls) {
+      const result = await run(...args)
+      assert.equal(result.code, 0, args.join(" "))
+      assert.equal(result.last.ok, false, JSON.stringify(args))
+    }
+    assert.deepEqual(seen, [], "no request for " + JSON.stringify(bad))
+  }
+
+  // A batch skips a row whose agent id from the feed is not one, and still
+  // repeats the others.
+  seen = []
+  const odd = failedRunItem(2)
+  odd.subject.metadata.agentId = "../agents/x"
+  routes["GET /api/companies/" + COMPANY + "/attention"] = attentionFeed([failedRunItem(1), odd])
+  routes["POST /api/agents/agent-1/wakeup"] = { status: 202, body: { id: "run-new" } }
+  const batch = await run("retry-all", "--company", COMPANY)
+  assert.equal(batch.last.retried, 1)
+  assert.equal(batch.last.refused, 1)
+  assert.deepEqual(seen.filter((r) => r.method === "POST").map((r) => r.url), ["/api/agents/agent-1/wakeup"])
+
+  // The probe asks nothing about a company whose id is not one.
+  seen = []
+  routes = {}
+  routes["GET /api/health"] = { status: 200, body: { status: "ok", version: "test" } }
+  routes["GET /api/companies"] = {
+    status: 200, body: { companies: BAD_IDS.map((id) => ({ id: id, name: "Odd" })) }
+  }
+  const report = await runProbe()
+  assert.deepEqual(report.companies, [])
+  assert.deepEqual(seen.map((r) => r.url), ["/api/health", "/api/companies"])
+})
+
 await group("an instance that is down is still a readable report", async () => {
   routes = {}
   const report = await runProbe()

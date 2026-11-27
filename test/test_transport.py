@@ -15,10 +15,12 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 
@@ -255,6 +257,59 @@ class Fetch(unittest.TestCase):
         finally:
             server.close()
 
+    def test_a_slow_answer_stops_at_one_deadline_for_the_whole_request(self):
+        # Each byte comes well inside the per-read timeout, so only a deadline
+        # for the whole request stops the reader: in the body, and before the
+        # headers are done.
+        stop = threading.Event()
+
+        def drip_body(h):
+            h.send_response(200)
+            h.send_header("Content-Length", "25")
+            h.end_headers()
+            for _ in range(25):
+                if stop.wait(0.2):
+                    return
+                try:
+                    h.wfile.write(b" ")
+                    h.wfile.flush()
+                except OSError:
+                    return
+
+        def drip_headers(h):
+            h.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            for i in range(25):
+                if stop.wait(0.2):
+                    return
+                try:
+                    h.wfile.write(b"X-Slow-%d: 1\r\n" % i)
+                    h.wfile.flush()
+                except OSError:
+                    return
+
+        for handler in (drip_body, drip_headers):
+            stop.clear()
+            server = Server(handler)
+            try:
+                started = time.monotonic()
+                reply = status.fetch(server.base, "", "GET", "/api/health", timeout=1.0)
+                took = time.monotonic() - started
+                self.assertEqual(reply.error, "TimeoutError", handler.__name__)
+                self.assertLess(took, 2.5, "%s kept the reader for %.1f s" % (handler.__name__, took))
+            finally:
+                stop.set()
+                server.close()
+
+    def test_the_deadline_leaves_no_alarm_behind(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"{}")))
+        try:
+            reply = status.fetch(server.base, "", "GET", "/api/health", timeout=0.5)
+            self.assertEqual((reply.status, reply.error), (200, ""))
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertIs(signal.getsignal(signal.SIGALRM), signal.SIG_DFL)
+        finally:
+            server.close()
+
     def test_an_oversize_error_body_is_capped_too(self):
         def flood(h):
             h.send_response(500)
@@ -443,6 +498,148 @@ class Probe(unittest.TestCase):
         report = self.run_probe("http://127.0.0.1:9", owned_by())
         self.assertFalse(report["reachable"])
         self.assertIn(report["state"], ("stopped", "not-installed"))
+
+
+class LargeAnswer(unittest.TestCase):
+    """The probe's output goes into the shell every plugin shares. Whatever
+    the instance answers within the body cap, the output stays small: the row
+    caps hold, and every string is cut or left out at its limit."""
+
+    # The output's bound, plain or redacted. The row caps and string limits
+    # put the real worst case near a quarter of this.
+    OUTPUT_LIMIT = 1024 * 1024
+    COMPANY_LIMIT = 4  # MAX_COMPANIES
+    INBOX_LIMIT = 100  # MAX_INBOX_FETCH
+    MOVING_LIMIT = 25  # the moving rows' cap on --items
+    TEXT_LIMITS = {"title": 120, "detail": 110, "company": 80, "name": 80, "agent": 80}
+    # Every other string: an id or key (whole or empty) or a link on the base.
+    ANY_LIMIT = 600
+
+    def routes(self, companies, items, runs, agents, issues, counts):
+        self.oversize = []
+
+        def handler(h):
+            path = h.path.split("?")[0]
+            if path == "/api/health":
+                body = {"status": "ok", "version": "test"}
+            elif path == "/api/companies":
+                body = {"companies": companies}
+            elif path.endswith("/attention"):
+                body = {"totalCount": len(items), "countsBySourceKind": counts, "items": items}
+            elif path.endswith("/heartbeat-runs"):
+                body = {"runs": runs}
+            elif path.endswith("/agents"):
+                body = {"agents": agents}
+            elif path.endswith("/issues"):
+                body = {"issues": issues}
+            else:
+                h.send_response(404)
+                h.end_headers()
+                return
+            raw = json.dumps(body, ensure_ascii=False).encode()
+            if len(raw) > status.MAX_BODY_BYTES:
+                self.oversize.append(path)
+            h.send_response(200)
+            h.send_header("Content-Type", "application/json")
+            h.end_headers()
+            h.wfile.write(raw)
+        return handler
+
+    def probe(self, handler, *extra):
+        server = Server(handler)
+        try:
+            results = []
+            for redacted in ([], ["--redacted"]):
+                out = io.StringIO()
+                original = status._proc_listener_uids
+                status._proc_listener_uids = owned_by(ME)
+                saved = {k: os.environ.get(k) for k in ("PAPERCLIP_OMARCHY_TOKEN", "XDG_STATE_HOME")}
+                os.environ["PAPERCLIP_OMARCHY_TOKEN"] = TOKEN
+                os.environ["XDG_STATE_HOME"] = tempfile.mkdtemp()
+                try:
+                    with contextlib.redirect_stdout(out):
+                        status.main(["--api-base", server.base, "--compact", "--instance",
+                                     "no-such-instance-xyz", "--timeout", "20", *extra, *redacted])
+                finally:
+                    status._proc_listener_uids = original
+                    for key, value in saved.items():
+                        if value is None:
+                            os.environ.pop(key, None)
+                        else:
+                            os.environ[key] = value
+                results.append(out.getvalue())
+            self.assertEqual(self.oversize, [], "the stub's answers stay under the body cap")
+            return results
+        finally:
+            server.close()
+
+    def check(self, text):
+        self.assertLess(len(text.encode()), self.OUTPUT_LIMIT)
+        report = json.loads(text)
+        self.assertTrue(report["reachable"], report.get("problems"))
+        self.assertLessEqual(len(report["companies"]), self.COMPANY_LIMIT)
+        self.assertLessEqual(len(report["needs"]), self.INBOX_LIMIT)
+        self.assertLessEqual(len(report["moving"]), self.MOVING_LIMIT)
+        self.assertLessEqual(len(report["inboxCounts"]), status.MAX_COUNT_KINDS)
+
+        def walk(value, field=""):
+            if isinstance(value, dict):
+                for key, inner in value.items():
+                    self.assertLessEqual(len(key), self.ANY_LIMIT, "a key of %s" % field)
+                    walk(inner, key)
+            elif isinstance(value, list):
+                for inner in value:
+                    walk(inner, field)
+            elif isinstance(value, str):
+                limit = self.TEXT_LIMITS.get(field, self.ANY_LIMIT)
+                self.assertLessEqual(len(value), limit, "%s is %d long" % (field, len(value)))
+
+        walk(report)
+        return report
+
+    def test_thousands_of_rows_are_cut_to_the_caps(self):
+        n = 3000
+        companies = [{"id": "co-%d" % i, "name": "Company %d" % i, "issuePrefix": "C%d" % i}
+                     for i in range(50)]
+        items = [{"sourceKind": "failed_run", "subject": {
+            "kind": "run", "id": "run-%d" % i, "title": "Run %d failed" % i,
+            "metadata": {"agentId": "agent-%d" % i}}, "dismissalKey": "attention:run:run-%d" % i}
+            for i in range(n)]
+        runs = [{"id": "run-%d" % i, "agentId": "agent-%d" % i, "status": "running"} for i in range(n)]
+        agents = [{"id": "agent-%d" % i, "name": "Agent %d" % i} for i in range(n)]
+        issues = [{"identifier": "C-%d" % i, "title": "Task %d" % i, "executionRunId": "run-%d" % i}
+                  for i in range(n)]
+        counts = {"kind_%d" % i: 1 for i in range(n)}
+        handler = self.routes(companies, items, runs, agents, issues, counts)
+        for text in self.probe(handler, "--inbox-items", "1000", "--items", "1000"):
+            report = self.check(text)
+            self.assertEqual(len(report["needs"]), self.INBOX_LIMIT)
+            self.assertEqual(len(report["moving"]), self.MOVING_LIMIT)
+            self.assertEqual(len(report["companies"]), self.COMPANY_LIMIT)
+
+    def test_text_of_fifty_kilobytes_is_cut_at_its_limit(self):
+        big = "é" * 50000
+        long_id = "x" * 50000
+
+        def company(i):
+            return {"id": "co-%d" % i, "name": big, "issuePrefix": long_id}
+
+        items = [{"id": long_id, "sourceKind": long_id, "severity": big, "whyNow": big,
+                  "snoozedUntil": big, "dismissalKey": long_id, "activityAt": big,
+                  "subject": {"kind": "run", "id": long_id, "title": big, "identifier": long_id,
+                              "href": "/" + long_id, "metadata": {"agentId": long_id}}}
+                 for _ in range(3)]
+        runs = [{"id": long_id, "agentId": "agent-1", "status": "running", "startedAt": big}]
+        agents = [{"id": "agent-1", "name": big}]
+        issues = [{"identifier": long_id, "title": big, "href": "/" + long_id, "executionRunId": long_id}]
+        counts = {long_id: 1, big: 2}
+        handler = self.routes([company(i) for i in range(4)], items, runs, agents, issues, counts)
+        plain, redacted = self.probe(handler)
+        report = self.check(plain)
+        self.assertEqual(len(report["needs"]), 4 * 3)
+        self.assertEqual(len(report["moving"]), 4)
+        self.assertEqual(len(report["needs"][0]["title"]), 120)
+        self.check(redacted)
 
 
 class RedactedCrash(unittest.TestCase):

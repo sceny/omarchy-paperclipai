@@ -36,6 +36,36 @@ GitHub release with these notes.
   again. Now nothing is replayed; at `Everything` only the stop and the start
   are announced. The same holds for a missing token, an inbox or run list the
   instance did not send, and closing the panel.
+- **A slow answer no longer holds the probe**: the request timeout (6 seconds
+  by default) now bounds the whole answer, connection and body together. A
+  listener that sent a byte every few seconds kept one read going for as long
+  as it liked.
+- **No *Create the web app* at an address that is not your Paperclip**: when
+  another program holds Paperclip's address, the panel shows the problem and
+  offers nothing that opens or creates something there.
+- **The browser starts with your session's umask**: a page or task opened
+  from the panel started the browser with the plugin's own `077`, so its
+  downloads and profile files were readable by you alone. The plugin's own
+  files stay private.
+- **Keep Paperclip running restarts a crash after a start from a terminal**:
+  a stop recorded earlier now ends when the plugin sees Paperclip answering
+  again, however it was started. Until now `systemctl --user start` from a
+  terminal left the stop in place, and a later crash was not restarted until
+  the shell restarted.
+
+### Security
+
+- **A url with a control character in it is not opened**: a newline, tab or
+  other control character after the instance's address is refused before the
+  browser sees it.
+- **An id goes into a request only in the server's own shape**: a company,
+  agent or task id holding `/`, `?`, `#`, `..` or any other character outside
+  letters, digits, `-` and `_` is refused before anything is sent, so a
+  request cannot reach another endpoint of the instance.
+- **The status report stays small whatever the instance answers**: every
+  name is cut at 80 characters, and an id, key or link longer than its limit
+  is left out rather than passed on. A report with thousands of rows or
+  megabyte names is at most the capped rows of short text.
 
 ## 0.3.0 — 2026-11-05
 

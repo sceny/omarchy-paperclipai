@@ -924,6 +924,15 @@ group("the footer offers the service key only when it does something", () => {
   assert.equal(Model.primaryAction(down, "").id, "start")
 })
 
+group("no action is offered at an address that is not Paperclip's", () => {
+  const noWebapp = { webapp: { installed: false } }
+  assert.equal(Model.primaryAction(Object.assign({ state: "idle", reachable: true }, noWebapp)).id, "webapp")
+  for (const extra of [noWebapp, {}, { webapp: { installed: true } }]) {
+    const report = Object.assign({ state: "untrusted-listener", reachable: false }, extra)
+    assert.equal(Model.primaryAction(report, ""), null, JSON.stringify(extra))
+  }
+})
+
 // "Keep Paperclip running": a stop seen from outside the panel is not undone.
 group("auto-start step", () => {
   const down = (unit, extra) => Object.assign({ state: "stopped", reachable: false,
@@ -940,8 +949,21 @@ group("auto-start step", () => {
   assert.equal(Model.autoStartStep(true, down("failed"), true, false).action, "start")
   // The setting Off starts nothing.
   assert.equal(Model.autoStartStep(false, down("inactive"), false, false).action, "")
-  // Answering: remember it, do nothing.
-  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "", wasUp: true })
+  // Answering again, however it was started (a terminal's systemctl start):
+  // any recorded stop is over, once; answering after that is nothing to do.
+  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "mark-running", wasUp: true })
+  assert.deepEqual(Model.autoStartStep(false, up, false, false), { action: "mark-running", wasUp: true })
+  assert.deepEqual(Model.autoStartStep(true, up, true, false), { action: "", wasUp: true })
+  // The panel's own start or stop in flight is not read as a start from outside.
+  assert.deepEqual(Model.autoStartStep(false, up, true, true), { action: "", wasUp: true })
+  // The whole story: stopped by hand, started from a terminal, then a crash is started again.
+  let story = Model.autoStartStep(false, up, true, false)
+  story = Model.autoStartStep(story.wasUp, down("inactive"), true, false)
+  assert.equal(story.action, "mark-stopped")
+  story = Model.autoStartStep(story.wasUp, up, true, false)
+  assert.equal(story.action, "mark-running")
+  story = Model.autoStartStep(story.wasUp, down("failed"), true, false)
+  assert.equal(story.action, "start")
   // In transition the unit gets neither, and the memory of "was up" survives to the next look.
   for (const unit of ["deactivating", "activating"]) {
     assert.deepEqual(Model.autoStartStep(true, down(unit), true, false), { action: "", wasUp: true }, unit)

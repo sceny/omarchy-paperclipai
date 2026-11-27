@@ -93,7 +93,8 @@ The `public-text` check runs on every pull request (a required status check on
 ours, leave nothing open without an issue and name no other repository's issue
 without its owner. Write them so (`docs/internals/releasing.md`, *Public text
 of a pull request*); `dev/public-text-check --pr N` (with `GITHUB_TOKEN`)
-reads a pull request's text against the rules.
+reads a pull request's text against the rules, `--issue N` an issue's: an
+issue's title, body and comments are public text on the same rules.
 
 A review is posted with `gh pr review <n> --comment --body …`, never `gh pr
 comment`. Until `main` carries `public-text.yml`, only a review starts
@@ -376,6 +377,7 @@ in order; the detail, the checklist and the record templates are in
 | `dev/loaded-code` | exit 0 when the running shell has the plugin's IPC functions; 1 means restart the shell |
 | `dev/sync-skills` | refresh `skills/` from an upstream checkout |
 | `dev/release-prepare` | make the release branch: version and CHANGELOG section |
+| `dev/develop-sync` | the `release` workflow's commit that brings `develop` level with `main` |
 | `dev/release-notes` | the `release` workflow's reading of the version and its CHANGELOG section |
 | `dev/marketplace-check.mjs` | the marketplace's own checks on one commit |
 | `CHANGELOG.md` | what's new, each version's notes |

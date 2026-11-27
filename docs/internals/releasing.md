@@ -163,8 +163,17 @@ git rev-parse origin/develop^{tree}
   head, and the checks of the candidate run on the new SHA.
 - The merge is the one into `main` in *Releasing* step 2. The `release` run then
   merges `main` into `develop` with a merge commit, because a release head leaves
-  `develop` with commits `main` does not have. Once the run is done,
+  `develop` with commits `main` does not have (`dev/develop-sync` makes that
+  commit; a conflict fails the run, it never only warns). Once the run is done,
   `git merge-base --is-ancestor origin/main origin/develop` exits 0.
+  `develop` takes only a commit with a `public-text` status, and GitHub takes a
+  status only on a commit it has, so the run pushes that merge to a
+  `develop-sync-X.Y.Z` branch, sets the status, pushes it to `develop` and
+  deletes the branch. Tested in `test/test_develop_sync.py`.
+- The run uses the `release.yml` of the commit pushed to `main`, not
+  `develop`'s: a fix to the release run works from the release that carries it.
+  0.3.0 was cut before the merge above existed, so its run only warned and
+  `develop` was brought level by hand.
 - A back-merge made by hand (a conflict the run cannot merge) is on a branch
   named `merge-main-X.Y.Z-into-develop`, never a task's branch: GitHub's merge
   message names the head branch, and `develop`'s `public-text` check reads that
@@ -189,7 +198,8 @@ at the call catches the next variant.
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
    is escaped wherever it is rendered as markup. A url from the API opens only
-   on the API's own origin (scheme, host and port). A notification's words go
+   on the API's own origin (scheme, host and port), and never with a control
+   character in it. A notification's words go
    to the daemon over D-Bus from stdin, not on a command line.
    Check: [`test/test_model.mjs`](../../test/test_model.mjs) (notification text),
    [`test/test_notify.py`](../../test/test_notify.py) (notification over D-Bus),
@@ -202,9 +212,12 @@ at the call catches the next variant.
    Check: [`test/test_doctor_session.mjs`](../../test/test_doctor_session.mjs).
 3. **HTTP clients are boxed in.**
    They follow no redirects, cap response size, and send nothing, token or not,
-   except to an own-uid loopback listener or over https.
+   except to an own-uid loopback listener or over https. An id goes into a
+   request path only in the server's id shape (letters, digits, `-`, `_`); any
+   other text in a path is quoted.
    Check: [`test/test_transport.py`](../../test/test_transport.py),
-   [`test/test_transport.mjs`](../../test/test_transport.mjs).
+   [`test/test_transport.mjs`](../../test/test_transport.mjs),
+   [`test/test_inbox.mjs`](../../test/test_inbox.mjs).
 4. **State is private and does not pile up.**
    Files under the state directory are created with umask 077. Private text has
    a retention limit; a token file others can read is not used.
@@ -280,6 +293,10 @@ URL, the check and the rule. In CI the run log does not print the matched words,
 since a log is public; `dev/public-text-check --pr N` run locally prints them. The
 author or reviewer edits the text and the check runs again on the edit. Every run reads all the pull request's text
 through the API, so a plain comment is read on the next run of any event.
+An issue is public text on the same rules: its title, body and comments are read
+when it is opened or edited and when a comment on it is written
+(`dev/public-text-check --issue N` reads one by hand). Like a comment's, an
+issue's run takes effect only once `main` carries the workflow.
 
 - Paperclip is this plugin's product: only the words for the tracker that
   runs our work (`Paperclip task`, `board`, `ticket`, `heartbeat`) fail.

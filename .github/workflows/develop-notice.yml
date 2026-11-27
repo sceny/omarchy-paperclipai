@@ -2,7 +2,9 @@ name: develop-notice
 
 # GitHub's failed-run notice goes only to the pusher's notification settings, so a red
 # public-text check on a push to develop opens an issue assigned to the pusher. Its own
-# workflow, on the push alone, keeps the public-text workflow read-only.
+# workflow, on the push alone, keeps the public-text workflow read-only. The check's
+# output goes in a fenced block, which public-text does not read: the notice is an
+# issue, and its rule names (`[rig]`, `[sandbox]`) would otherwise fail it.
 
 on:
   push:
@@ -38,14 +40,25 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           body="$RUNNER_TEMP/public-text-notice.md"
+          if grep -q '^public-text-check: out of time:' "$RUNNER_TEMP/public-text.txt"; then
+            title="public-text ran out of time on develop"
+            lead="The \`public-text\` check ran out of time on a push to \`develop\`, so the text was not checked."
+            ending="Run the job again from the run above."
+          else
+            title="public-text failed on develop"
+            lead="The \`public-text\` check failed on a push to \`develop\`."
+            ending="Edit the text that failed, or record here why it stays."
+          fi
           {
-            echo "The \`public-text\` check failed on a push to \`develop\`. The commit is ${COMMIT_URL} and the run is ${RUN_URL}."
+            echo "$lead The commit is ${COMMIT_URL} and the run is ${RUN_URL}."
             echo
             echo "Check output:"
             echo
-            sed 's/^/    /' "$RUNNER_TEMP/public-text.txt"
+            echo "~~~"
+            cat "$RUNNER_TEMP/public-text.txt"
+            echo "~~~"
             echo
-            echo "Edit the text that failed, or record here why it stays."
+            echo "$ending"
           } > "$body"
           assignee="$ACTOR"
           # A merge queue is a bot, which no issue can be assigned to: assign the merged pull request's author.
@@ -58,4 +71,4 @@ jobs:
           else
             echo "::warning::No person to assign the notice to; it is filed without an assignee"
           fi
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "public-text failed on develop" --body-file "$body" "${assign[@]}"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" "${assign[@]}"

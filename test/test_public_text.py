@@ -60,6 +60,7 @@ class Environment(unittest.TestCase):
         "test-count-passes": "The selftest passes 47/0.",
         "test-count": "The suite ran 380 tests.",
         "test-tally": "76 pass, 0 fail.",
+        "test-count-of": "One check of 44 failed once on one run.",
         "own-machine": "It works on this machine.",
     }
 
@@ -116,6 +117,7 @@ class Environment(unittest.TestCase):
             ("test-count-passed", "92 passed, 0 failed."),
             ("test-count", "The suite ran 380 tests."),
             ("test-tally", "76 pass, 0 fail."),
+            ("test-count-of", "One check of 44 failed once on one run."),
         ]:
             with self.subTest(rule=rule):
                 self.assertIn((ENV, rule), problems(text, files))
@@ -207,6 +209,33 @@ class Environment(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(checks(text), text)
 
+
+    def test_a_count_of_checks_out_of_a_total_fails_and_a_date_or_version_passes(self):
+        for text in [
+            "One check of 44 failed once on one run.",
+            "one check of 44",
+            "3 checks of 44 failed.",
+            "Every check of 44 is green.",
+            "All 44 of 44 checks pass.",
+            "2 of 3 tests failed on the old head.",
+            "The selftest: one case of 12 is red.",
+        ]:
+            with self.subTest(text=text):
+                self.assertIn((ENV, "test-count-of"), problems(text))
+        for text in [
+            "Released on 2026-11-27, with one check of the token.",
+            "One check of 2026-11-27 reads the key.",
+            "One check of 0.3.0 reads the key.",
+            "Version 0.3.0 of the plugin.",
+            "The release of 2026-11-27.",
+            "One check of 2026 reads the key.",
+            "The panel shows one of 3 agents.",
+            "All checks of the token pass.",
+            "The check of version 2 reads the key.",
+            "No check of 10:30 is shown.",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(problems(text), [])
 
     def test_html_comments_are_read_and_fences_stay_blank(self):
         for rule, text in [
@@ -723,6 +752,95 @@ class PushRead(unittest.TestCase):
         self.assertIsNone(ptc.pull_request_number({"merge_group": {"head_ref": "refs/heads/develop"}}))
 
 
+class Issues(unittest.TestCase):
+    """An issue is public text too: its title, body and comments, on the same rules."""
+    REPO = "sceny/omarchy-paperclipai"
+    URL = "https://github.com/sceny/omarchy-paperclipai/issues/45"
+    ISSUE = {"html_url": URL, "number": 45, "title": "The panel keeps the old count", "body": "Clean body."}
+    COMMENT = {"html_url": URL + "#issuecomment-1", "body": "Seen again on the bar."}
+
+    def fake_api(self, issue=None, comments=()):
+        def api(path, token):
+            key = path.split("?")[0]
+            if key == "/repos/%s/issues/45" % self.REPO:
+                return dict(self.ISSUE, **(issue or {}))
+            if key == "/repos/%s/issues/45/comments" % self.REPO:
+                return list(comments)
+            raise AssertionError("an issue reads nothing else: " + path)
+        return api
+
+    def read(self, issue=None, comments=()):
+        with mock.patch.object(ptc, "api", self.fake_api(issue, comments)):
+            return ptc.read_issue(self.REPO, 45, "token")
+
+    def test_the_title_body_and_comments_are_read_and_no_file_is_changed(self):
+        doc = self.read(comments=[self.COMMENT])
+        self.assertEqual(doc["changed_files"], [])
+        self.assertEqual([(t["url"], t["kind"]) for t in doc["texts"]],
+                         [(self.URL, "title"), (self.URL, "body"), (self.COMMENT["html_url"], "comment")])
+        self.assertEqual(checks_of(doc), set())
+
+    def test_the_setup_in_a_title_body_or_comment_fails(self):
+        for where, issue, comments, rule in [
+            ("title", {"title": "Seen in the rig: the old count"}, (), "rig"),
+            ("body", {"body": "Seen in the rig after a restart."}, (), "rig"),
+            ("body", {"body": "One check of 44 failed once on one run."}, (), "test-count-of"),
+            ("comment", None, [dict(self.COMMENT, body="Ran dev/rig check again.")], "sandbox-tool"),
+        ]:
+            with self.subTest(where=where, rule=rule):
+                self.assertIn((ENV, rule), checks_of(self.read(issue, comments)))
+
+    def test_the_issue_s_events_name_it_and_a_pull_request_s_comment_does_not(self):
+        self.assertEqual(ptc.issue_number({"action": "opened", "issue": {"number": 45}}), 45)
+        self.assertEqual(ptc.issue_number({"action": "created", "issue": {"number": 45}, "comment": {}}), 45)
+        self.assertIsNone(ptc.issue_number({"issue": {"number": 301, "pull_request": {"url": "x"}}}))
+        self.assertIsNone(ptc.issue_number({"pull_request": {"number": 7}}))
+
+    def run_main(self, event_name, event, body, argv=()):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            json.dump(event, handle)
+        env = {"GITHUB_EVENT_NAME": event_name, "GITHUB_EVENT_PATH": handle.name, "GITHUB_TOKEN": "token",
+               "GITHUB_REPOSITORY": self.REPO, "GITHUB_ACTIONS": "true"}
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with mock.patch.dict(os.environ, env), mock.patch.object(ptc, "api", self.fake_api({"body": body})), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = ptc.main(list(argv))
+        finally:
+            os.unlink(handle.name)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_an_issue_event_is_read_and_ci_prints_the_rule_not_the_words(self):
+        for event_name, event in [("issues", {"action": "opened", "issue": {"number": 45}}),
+                                  ("issue_comment", {"action": "created", "issue": {"number": 45}})]:
+            for body in ("Seen in the rig after a restart.", "One check of 44 failed once on one run."):
+                with self.subTest(event=event_name, body=body):
+                    code, out, _ = self.run_main(event_name, event, body)
+                    self.assertEqual(code, 1)
+                    self.assertIn("FAIL public-text-environment [", out)
+                    self.assertIn(self.URL, out)
+                    self.assertNotIn("restart", out)
+                    self.assertNotIn("44", out)
+            with self.subTest(event=event_name, body="clean"):
+                code, out, _ = self.run_main(event_name, event, "The panel keeps the old count after a restart.")
+                self.assertEqual((code, out.strip()), (0, "public-text-check: the public text passes"))
+
+    def test_issue_reads_one_issue_by_hand(self):
+        code, out, _ = self.run_main("push", {"before": "aaa", "after": "bbb"}, "Seen in the rig.", ["--issue", "45"])
+        self.assertEqual(code, 1)
+        self.assertIn("[rig] " + self.URL, out)
+
+    def test_an_issue_with_the_setup_fails_the_fixture_run_and_one_without_passes(self):
+        run = WholePullRequest.run_cli
+        for body in ("Seen in the rig after a restart.", "One check of 44 failed once on one run."):
+            with self.subTest(body=body):
+                result = run(self, self.read({"body": body}), ci=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("public-text-environment", result.stdout)
+        result = run(self, self.read({"body": "The panel keeps the old count after a restart."}), ci=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+
 def checks_of(doc):
     return {(check, rule) for _, check, rule, _ in ptc.check_pull_request(RULES, doc)}
 
@@ -867,13 +985,26 @@ class Workflow(unittest.TestCase):
             self.text = handle.read()
 
     def test_it_runs_on_the_events_that_carry_public_text(self):
-        for event in ("pull_request:", "pull_request_review:", "pull_request_review_comment:", "issue_comment:"):
+        for event in ("pull_request:", "pull_request_review:", "pull_request_review_comment:", "issue_comment:", "issues:"):
             self.assertIn("\n  " + event, self.text)
 
     def test_a_push_to_develop_reads_what_lands_and_a_comment_after_the_merge(self):
         self.assertRegex(self.text, r"(?m)^  push:\n    branches: \[develop\]$")
-        self.assertIn("github.event.issue.pull_request", self.text)
         self.assertIn("cancel-in-progress: ${{ github.event_name != 'push' }}", self.text)
+
+    def test_an_issue_and_every_comment_on_it_are_read(self):
+        self.assertRegex(self.text, r"(?m)^  issues:\n    types: \[opened, edited\]$")
+        self.assertNotIn("github.event.issue.pull_request", self.text)
+        self.assertNotRegex(self.text, r"(?m)^    if:")
+        self.assertIn("issues: read", self.text)
+
+    def test_the_failure_notice_holds_the_output_where_the_check_does_not_read(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "develop-notice.yml")) as handle:
+            notice = handle.read()
+        self.assertRegex(notice, r'echo "~~~"\n\s+cat "\$RUNNER_TEMP/public-text.txt"\n\s+echo "~~~"')
+        output = "FAIL public-text-environment [rig] https://example.test/c/0\nFAIL public-text-environment [sandbox] u"
+        self.assertEqual(problems("Check output:\n\n~~~\n%s\n~~~\n" % output), [])
+        self.assertIn((ENV, "rig"), problems("Check output:\n\n    " + output))
 
     def test_a_comment_run_never_shares_the_head_s_group(self):
         group = re.search(r"(?m)^  group: (.*)$", self.text).group(1)

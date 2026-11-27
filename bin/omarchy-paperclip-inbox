@@ -51,6 +51,9 @@ RETRY_ALL_MAX_LIMIT = 100
 # The API never returns more than 100 rows in one page.
 FEED_PAGE = 100
 SKIP_REPORT_FILE = "skip-report.json"
+# The server's id shape. An id goes into a request path only when it matches
+# in full: one with `/`, `?`, `#` or `..` would send the token's request to
+# another endpoint of the same instance.
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
 PLUGIN_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 SINCE_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
@@ -139,6 +142,11 @@ def code_of(payload) -> str:
     return ""
 
 
+def path_id(value: str) -> bool:
+    """May `value` go into a request path as it is?"""
+    return bool(ID_PATTERN.fullmatch(value or ""))
+
+
 def emit(obj, stream=None) -> None:
     (stream or sys.stdout).write(json.dumps(obj) + "\n")
     (stream or sys.stdout).flush()
@@ -202,6 +210,10 @@ def retry_run(writer: Writer, agent_id: str, run_id: str) -> dict:
     nothing but the run to repeat. It is the same call the Paperclip board
     makes from the run page.
     """
+    if not path_id(agent_id):
+        return {"action": "retry", "retryKind": "run", "runId": run_id, "agentId": agent_id,
+                "ok": False, "status": 0, "message": "This row's agent id is not one.",
+                "code": "bad_id"}
     ok, status, payload = writer.send(
         "POST", "/api/agents/%s/wakeup" % agent_id,
         {
@@ -234,6 +246,10 @@ def retry_run(writer: Writer, agent_id: str, run_id: str) -> dict:
 
 def retry_recovery(writer: Writer, issue_id: str, action_id: str) -> dict:
     """Hand the task back to its owner and let it be picked up again."""
+    if not path_id(issue_id):
+        return {"action": "retry", "retryKind": "recovery", "issueId": issue_id,
+                "actionId": action_id, "ok": False, "status": 0,
+                "message": "This row's task id is not one.", "code": "bad_id"}
     ok, status, payload = writer.send(
         "POST", "/api/issues/%s/recovery-actions/resolve" % issue_id,
         {"actionId": action_id, "outcome": "restored", "sourceIssueStatus": "todo"},
@@ -445,6 +461,11 @@ def main(argv=None) -> int:
 
     if not args.company:
         emit({"ok": False, "action": args.command, "message": "No company id was given."})
+        return 0
+
+    if not path_id(args.company):
+        emit({"ok": False, "action": args.command, "message": "The company id is not one.",
+              "code": "bad_id"})
         return 0
 
     if args.command in ("dismiss", "restore", "snooze") and not args.item_key:
