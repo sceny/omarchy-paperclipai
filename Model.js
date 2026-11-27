@@ -841,15 +841,12 @@ function diffNotifications(previous, next, level, seen) {
   var out = { notifications: [], seen: seen || {} }
   if (!next) return out
   var mode = normalizeNotifyLevel(level)
-  if (mode === NOTIFY_OFF) return out
+  // Off says nothing and still marks what it saw as seen, as a snoozed plugin
+  // does, so turning notifications back on is never a replay of the meantime.
+  if (mode === NOTIFY_OFF) return markSeen(out, next, !!previous)
 
   // First report of the session: remember what is already waiting, say nothing.
-  if (!previous) {
-    out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
-    out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
-    out.seen = forgetHidden(out.seen, next)
-    return out
-  }
+  if (!previous) return markSeen(out, next, false)
 
   // `Needs-me` is pending decisions and nothing else. The instance's own state
   // shows on the bar icon; a toast for it is `Everything`'s.
@@ -971,9 +968,15 @@ function diffNotifications(previous, next, level, seen) {
     }
   }
 
+  return markSeen(out, next, true)
+}
+
+// Remembers every row of `next` in `out.seen`; `prune` forgets the rows that
+// are gone, which only a report after a first one can tell.
+function markSeen(out, next, prune) {
   out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
   out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
-  out.seen = forgetHidden(pruneKeys(out.seen, next), next)
+  out.seen = forgetHidden(prune ? pruneKeys(out.seen, next) : out.seen, next)
   return out
 }
 

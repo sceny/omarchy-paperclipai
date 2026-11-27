@@ -336,6 +336,22 @@ group("no notification carries a bell", () => {
 
   // Off stays off.
   assert.equal(Model.diffNotifications(seed, busy, Model.NOTIFY_OFF, {}).notifications.length, 0)
+
+  // Off still marks what it saw: turning notifications back on replays nothing
+  // that arrived while they were off (#126).
+  const empty = Model.parseReport(JSON.stringify({ state: "idle", reachable: true, attention: 0 }))
+  const two = Model.parseReport(JSON.stringify({
+    state: "needs-you", reachable: true, attention: 2,
+    needs: [{ key: "x", kind: "approval", title: "One" }, { key: "y", kind: "approval", title: "Two" }],
+    moving: [{ key: "r9", title: "Running" }]
+  }))
+  for (const level of [Model.NOTIFY_NEEDED, Model.NOTIFY_ALL]) {
+    let seen = Model.diffNotifications(null, empty, Model.NOTIFY_ALL, {}).seen
+    const off = Model.diffNotifications(empty, two, Model.NOTIFY_OFF, seen)
+    assert.equal(off.notifications.length, 0)
+    const on = Model.diffNotifications(two, two, level, off.seen)
+    assert.deepEqual(on.notifications.map((n) => n.key), [], level + " replayed what arrived at Off")
+  }
 })
 
 group("a moment's outage replays nothing", () => {
