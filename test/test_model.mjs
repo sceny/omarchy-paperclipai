@@ -456,6 +456,78 @@ group("a moment's outage replays nothing", () => {
   assert.ok(fromAll.d3 && fromAll.f1, "an open row past a cut `All` list is kept")
 })
 
+group("opening the panel toasts nothing that was waiting at the start", () => {
+  // The bar's probe lists 20 rows, the open panel's up to 60; the count is the
+  // whole inbox either way. Rows past the first 20 were waiting all along.
+  const start = Date.parse("2026-10-09T17:00:00Z")
+  const report = (fields) => Model.parseReport(JSON.stringify(Object.assign({
+    state: "needs-you", reachable: true, generatedAt: "2026-10-09T17:00:00Z", moving: []
+  }, fields)))
+  const row = (n, at) => ({ key: "r" + n, kind: "approval", title: "Item " + n, activityMs: at })
+  const old = (n) => row(n, start - 3600 * 1000 - n)
+  const rows = (count, make) => Array.from({ length: count }, (_, i) => (make || old)(i + 1))
+  const closed = report({ attention: 30, needs: rows(20) })
+  const opened = report({ attention: 30, needs: rows(30), generatedAt: "2026-10-09T17:01:00Z" })
+
+  for (const level of [Model.NOTIFY_ALL, Model.NOTIFY_NEEDED]) {
+    const first = Model.diffNotifications(null, closed, level, {}, 0)
+    assert.equal(first.since, start, "a short first list keeps the session's start")
+    const open = Model.diffNotifications(closed, opened, level, first.seen, first.since)
+    assert.deepEqual(open.notifications.map((n) => n.key), [], level + ": rows past the short list toasted")
+    assert.ok(open.seen.r30, "the rows it held back are seen")
+    assert.equal(open.since, 0, "a list of every row ends the start's cover")
+
+    // A row really new since the start still speaks, even when it first shows
+    // past the bar's short list.
+    const later = report({ attention: 31, generatedAt: "2026-10-09T17:02:00Z",
+                           needs: rows(30).concat([row(99, start + 90 * 1000)]) })
+    const late = Model.diffNotifications(closed, later, level, first.seen, first.since)
+    assert.deepEqual(late.notifications.map((n) => n.key), ["needs:r99"], level)
+
+    // A row with no time cannot show it is new, so it waits with the rest.
+    const bare = (count) => report({ attention: 30, needs: rows(count, (n) => row(n, 0)) })
+    const seeded = Model.diffNotifications(null, bare(20), level, {}, 0)
+    assert.deepEqual(Model.diffNotifications(bare(20), bare(30), level, seeded.seen, seeded.since)
+      .notifications.map((n) => n.key), [], level + ": a row with no time toasted")
+
+    // Off keeps the same cover: a session that started at Off and is turned on
+    // before the panel first opens toasts none of the rows that waited.
+    const quiet = Model.diffNotifications(null, closed, Model.NOTIFY_OFF, {}, 0)
+    assert.equal(quiet.since, start, "Off's first short list keeps the session's start")
+    const turnedOn = Model.diffNotifications(closed, opened, level, quiet.seen, quiet.since)
+    assert.deepEqual(turnedOn.notifications.map((n) => n.key), [], level + ": Off then on toasted the backlog")
+
+    // A whole list seen at Off ends the cover, so after notifications are
+    // turned on a row that leaves and comes back speaks again.
+    const offOpen = Model.diffNotifications(closed, opened, Model.NOTIFY_OFF, quiet.seen, quiet.since)
+    assert.equal(offOpen.since, 0, "a list of every row at Off ends the start's cover")
+    const shorter = report({ attention: 29, needs: rows(30).slice(1), generatedAt: "2026-10-09T17:02:00Z" })
+    const left = Model.diffNotifications(opened, shorter, level, offOpen.seen, offOpen.since)
+    const returned = Model.diffNotifications(shorter, opened, level, left.seen, left.since)
+    assert.deepEqual(returned.notifications.map((n) => n.key), ["needs:r1"], level + ": a returning row stayed quiet")
+  }
+
+  // An instance down at the start does not replay its inbox when it comes up.
+  const down = report({ state: "stopped", reachable: false })
+  const first = Model.diffNotifications(null, down, Model.NOTIFY_ALL, {}, 0)
+  const up = Model.diffNotifications(down, closed, Model.NOTIFY_ALL, first.seen, first.since)
+  assert.deepEqual(up.notifications.map((n) => n.key), ["instance:started"])
+
+  // A first list that holds every row needs no cover: what comes back after it
+  // was gone speaks again, however old its time.
+  const whole = report({ attention: 3, needs: rows(3) })
+  const seed = Model.diffNotifications(null, whole, Model.NOTIFY_ALL, {}, 0)
+  assert.equal(seed.since, 0)
+  const fewer = report({ attention: 2, needs: rows(3).slice(1) })
+  const gone = Model.diffNotifications(whole, fewer, Model.NOTIFY_ALL, seed.seen, seed.since)
+  const back = Model.diffNotifications(fewer, whole, Model.NOTIFY_ALL, gone.seen, gone.since)
+  assert.deepEqual(back.notifications.map((n) => n.key), ["needs:r1"])
+
+  // The probe's time survives the parse; anything else is no time.
+  assert.equal(report({ needs: [row(1, 1234)] }).needs[0].activityMs, 1234)
+  assert.equal(report({ needs: [row(1, "soon")] }).needs[0].activityMs, 0)
+})
+
 group("the bar bubble counts what is waiting", () => {
   assert.equal(Model.badgeText(null), "")
   assert.equal(Model.badgeText({ state: "idle", attention: 0 }), "")
