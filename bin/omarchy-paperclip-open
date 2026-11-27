@@ -66,6 +66,13 @@ if [[ $lower_url != "$lower_base" ]]; then
   fi
 fi
 
+# A control character (a newline, a tab) has no place in a url the panel
+# built; one that came through is refused rather than handed on.
+if [[ $url == *[[:cntrl:]]* ]]; then
+  pc_fail "Refusing to open a url with a control character in it."
+  exit 1
+fi
+
 if [[ ${url%/} == "$base" ]]; then
   [[ $new_window == false ]] && pc_focus_webapp_window && exit 0
 fi

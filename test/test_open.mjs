@@ -107,6 +107,21 @@ for (const bad of [
   assert.deepEqual(r.calls, [], "nothing is launched or raised for " + bad)
 }
 
+// A control character after the origin is refused, wherever it sits.
+for (const bad of [
+  BASE + "/a\nb",
+  BASE + "/a\rb",
+  BASE + "/a\tb",
+  BASE + "?q=\u0001",
+  BASE + "#\u001b[31m",
+  BASE + "/x\u007f",
+  BASE + "\n",
+]) {
+  r = run([bad], { windowOpen: false })
+  assert.notEqual(r.status, 0, "refused: " + JSON.stringify(bad))
+  assert.deepEqual(r.calls, [], "nothing is launched or raised for " + JSON.stringify(bad))
+}
+
 r = run(["--new-window", "https://evil.example/"], { windowOpen: false })
 assert.notEqual(r.status, 0)
 assert.deepEqual(r.calls, [], "--new-window does not widen the origin")

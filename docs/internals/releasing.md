@@ -185,7 +185,8 @@ at the call catches the next variant.
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
    is escaped wherever it is rendered as markup. A url from the API opens only
-   on the API's own origin (scheme, host and port). A notification's words go
+   on the API's own origin (scheme, host and port), and never with a control
+   character in it. A notification's words go
    to the daemon over D-Bus from stdin, not on a command line.
    Check: [`test/test_model.mjs`](../../test/test_model.mjs) (notification text),
    [`test/test_notify.py`](../../test/test_notify.py) (notification over D-Bus),

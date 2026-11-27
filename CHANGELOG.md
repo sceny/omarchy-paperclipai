@@ -48,6 +48,12 @@ GitHub release with these notes.
   downloads and profile files were readable by you alone. The plugin's own
   files stay private.
 
+### Security
+
+- **A url with a control character in it is not opened**: a newline, tab or
+  other control character after the instance's address is refused before the
+  browser sees it.
+
 ## 0.3.0 — 2026-11-05
 
 ### Highlights
