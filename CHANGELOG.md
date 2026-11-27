@@ -26,6 +26,10 @@ GitHub release with these notes.
 
 ### Fixes
 
+- **Turning notifications back on no longer replays the meantime.** What
+  arrived while *Desktop notifications* was `Off` is marked seen, as it is
+  while the plugin is snoozed, so switching to `Needs-me` or `Everything`
+  raises a toast only for what arrives after.
 - **A row snoozed in Paperclip stays out of the plugin** until its snooze ends:
   it is not listed, counted or toasted, under either inbox filter, and Retry
   all leaves it alone. The `All` filter now adds only the rows you cleared;
