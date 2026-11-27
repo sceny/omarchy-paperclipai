@@ -181,6 +181,10 @@ Item {
       Util.execArgv([serviceScript, "mark-stopped", "--session", shellSession])
       return
     }
+    if (step.action === "mark-running") {
+      Util.execArgv([serviceScript, "mark-running", "--session", shellSession])
+      return
+    }
     if (step.action !== "start") return
     var now = Date.now()
     if (now - _lastAutoStartAsk < 60000) return

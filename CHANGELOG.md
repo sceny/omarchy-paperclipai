@@ -47,6 +47,11 @@ GitHub release with these notes.
   from the panel started the browser with the plugin's own `077`, so its
   downloads and profile files were readable by you alone. The plugin's own
   files stay private.
+- **Keep Paperclip running restarts a crash after a start from a terminal**:
+  a stop recorded earlier now ends when the plugin sees Paperclip answering
+  again, however it was started. Until now `systemctl --user start` from a
+  terminal left the stop in place, and a later crash was not restarted until
+  the shell restarted.
 
 ### Security
 

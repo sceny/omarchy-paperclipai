@@ -112,13 +112,15 @@ outside the panel (`systemctl --user`, a terminal) shows within a poll.
 - **Stop asks once when agents are at work.** The first press names how many
   and turns the button into *press again*; the second, within six seconds,
   stops it. An idle instance stops at the first press.
-- **A stop stays stopped until Start or a shell restart.** *Keep Paperclip
-  running* (`autoStart`) does not start it again meanwhile, on every screen:
-  the bar builds one copy of the plugin per screen, and all copies share one
-  marker, `stopped-by-user` in `$XDG_STATE_HOME/omarchy/paperclipai`.
-  `omarchy-paperclip-service stop` writes it; `start`, `restart` and `install`
-  remove it. It belongs to the shell session that wrote it, so a restart of
-  the shell ends it.
+- **A stop stays stopped until Paperclip runs again or the shell restarts.**
+  *Keep Paperclip running* (`autoStart`) does not start it again meanwhile, on
+  every screen: the bar builds one copy of the plugin per screen, and all
+  copies share one marker, `stopped-by-user` in
+  `$XDG_STATE_HOME/omarchy/paperclipai`. `omarchy-paperclip-service stop`
+  writes it; `start`, `restart` and `install` remove it, and so does the
+  plugin when it sees Paperclip answering again, however it was started
+  (`systemctl --user start paperclipai` in a terminal, say). It belongs to the
+  shell session that wrote it, so a restart of the shell ends it.
 - **A stop from a terminal counts too.** `systemctl --user stop paperclipai`
   and `paperclipai service stop` are recognised when the plugin sees the
   instance answering and then the unit cleanly inactive; it writes the same

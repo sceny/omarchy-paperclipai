@@ -949,8 +949,21 @@ group("auto-start step", () => {
   assert.equal(Model.autoStartStep(true, down("failed"), true, false).action, "start")
   // The setting Off starts nothing.
   assert.equal(Model.autoStartStep(false, down("inactive"), false, false).action, "")
-  // Answering: remember it, do nothing.
-  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "", wasUp: true })
+  // Answering again, however it was started (a terminal's systemctl start):
+  // any recorded stop is over, once; answering after that is nothing to do.
+  assert.deepEqual(Model.autoStartStep(false, up, true, false), { action: "mark-running", wasUp: true })
+  assert.deepEqual(Model.autoStartStep(false, up, false, false), { action: "mark-running", wasUp: true })
+  assert.deepEqual(Model.autoStartStep(true, up, true, false), { action: "", wasUp: true })
+  // The panel's own start or stop in flight is not read as a start from outside.
+  assert.deepEqual(Model.autoStartStep(false, up, true, true), { action: "", wasUp: true })
+  // The whole story: stopped by hand, started from a terminal, then a crash is started again.
+  let story = Model.autoStartStep(false, up, true, false)
+  story = Model.autoStartStep(story.wasUp, down("inactive"), true, false)
+  assert.equal(story.action, "mark-stopped")
+  story = Model.autoStartStep(story.wasUp, up, true, false)
+  assert.equal(story.action, "mark-running")
+  story = Model.autoStartStep(story.wasUp, down("failed"), true, false)
+  assert.equal(story.action, "start")
   // In transition the unit gets neither, and the memory of "was up" survives to the next look.
   for (const unit of ["deactivating", "activating"]) {
     assert.deepEqual(Model.autoStartStep(true, down(unit), true, false), { action: "", wasUp: true }, unit)

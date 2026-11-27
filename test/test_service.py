@@ -189,6 +189,25 @@ class ScreensShareOneStop(Harness):
         self.assertEqual(self.copy("autostart").returncode, 0)
         self.assertEqual(self.starts(), 0)
 
+    def test_an_instance_answering_again_ends_the_stop(self):
+        # Stopped by hand, then started from a terminal (no script of ours):
+        # once the plugin sees it answer, a later crash is started again.
+        self.assertEqual(self.copy("mark-stopped").returncode, 0)
+        open(self.up, "w").close()
+        self.assertEqual(self.copy("mark-running").returncode, 0)
+        self.assertFalse(os.path.exists(self.marker))
+        os.remove(self.up)
+        self.assertEqual(self.copy("autostart").returncode, 0)
+        self.assertEqual(self.starts(), 1)
+
+    def test_mark_running_keeps_the_stop_while_nothing_answers(self):
+        # The report that asked may be a poll old: only an answer now counts.
+        self.assertEqual(self.copy("mark-stopped").returncode, 0)
+        self.assertEqual(self.copy("mark-running").returncode, 0)
+        self.assertTrue(os.path.exists(self.marker))
+        self.assertEqual(self.copy("autostart").returncode, 0)
+        self.assertEqual(self.starts(), 0)
+
     def test_without_a_stop_the_guarded_start_starts_it(self):
         run = self.copy("autostart")
         self.assertEqual(run.returncode, 0, run.stderr)
