@@ -15,10 +15,12 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 
@@ -252,6 +254,59 @@ class Fetch(unittest.TestCase):
             reply = status.fetch(server.base, "", "GET", "/api/health")
             self.assertEqual((reply.error, reply.code), ("answer too large", "too-large"))
             self.assertLess(len(sent) * 65536, 16 * 1024 * 1024, "the reader kept going")
+        finally:
+            server.close()
+
+    def test_a_slow_answer_stops_at_one_deadline_for_the_whole_request(self):
+        # Each byte comes well inside the per-read timeout, so only a deadline
+        # for the whole request stops the reader: in the body, and before the
+        # headers are done.
+        stop = threading.Event()
+
+        def drip_body(h):
+            h.send_response(200)
+            h.send_header("Content-Length", "25")
+            h.end_headers()
+            for _ in range(25):
+                if stop.wait(0.2):
+                    return
+                try:
+                    h.wfile.write(b" ")
+                    h.wfile.flush()
+                except OSError:
+                    return
+
+        def drip_headers(h):
+            h.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            for i in range(25):
+                if stop.wait(0.2):
+                    return
+                try:
+                    h.wfile.write(b"X-Slow-%d: 1\r\n" % i)
+                    h.wfile.flush()
+                except OSError:
+                    return
+
+        for handler in (drip_body, drip_headers):
+            stop.clear()
+            server = Server(handler)
+            try:
+                started = time.monotonic()
+                reply = status.fetch(server.base, "", "GET", "/api/health", timeout=1.0)
+                took = time.monotonic() - started
+                self.assertEqual(reply.error, "TimeoutError", handler.__name__)
+                self.assertLess(took, 2.5, "%s kept the reader for %.1f s" % (handler.__name__, took))
+            finally:
+                stop.set()
+                server.close()
+
+    def test_the_deadline_leaves_no_alarm_behind(self):
+        server = Server(lambda h: (h.send_response(200), h.end_headers(), h.wfile.write(b"{}")))
+        try:
+            reply = status.fetch(server.base, "", "GET", "/api/health", timeout=0.5)
+            self.assertEqual((reply.status, reply.error), (200, ""))
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertIs(signal.getsignal(signal.SIGALRM), signal.SIG_DFL)
         finally:
             server.close()
 
