@@ -31,5 +31,6 @@ run python3 test/test_loaded_code.py
 run python3 test/test_release_prepare.py
 run python3 test/test_release_head.py
 run python3 test/test_public_text.py
+run bash dev/regression.sh --self-check
 
 exit "$failed"
