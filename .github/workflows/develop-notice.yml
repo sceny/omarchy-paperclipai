@@ -2,7 +2,9 @@ name: develop-notice
 
 # GitHub's failed-run notice goes only to the pusher's notification settings, so a red
 # public-text check on a push to develop opens an issue assigned to the pusher. Its own
-# workflow, on the push alone, keeps the public-text workflow read-only.
+# workflow, on the push alone, keeps the public-text workflow read-only. The check's
+# output goes in a fenced block, which public-text does not read: the notice is an
+# issue, and its rule names (`[rig]`, `[sandbox]`) would otherwise fail it.
 
 on:
   push:
@@ -43,7 +45,9 @@ jobs:
             echo
             echo "Check output:"
             echo
-            sed 's/^/    /' "$RUNNER_TEMP/public-text.txt"
+            echo "~~~"
+            cat "$RUNNER_TEMP/public-text.txt"
+            echo "~~~"
             echo
             echo "Edit the text that failed, or record here why it stays."
           } > "$body"
