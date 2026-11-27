@@ -585,7 +585,13 @@ cmd_install() {
     rig_record_settled install-enable 0 omarchy plugin enable "$RIG_PLUGIN_ID" "$RIG_BAR_SECTION" ||
       rig_die "install: 'omarchy plugin enable' failed; see $RIG_EVIDENCE/install-enable.log"
   fi
-  rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar"
+
+  local deadline=$((SECONDS + 5))
+  until timeout 3 omarchy-shell paperclip status >/dev/null 2>&1; do
+    ((SECONDS < deadline)) || rig_die "install: the panel did not answer 'omarchy-shell paperclip status' within 5 seconds"
+    sleep 1
+  done
+  rig_ok "$RIG_PLUGIN_ID is installed and on the $RIG_BAR_SECTION bar; the panel answers over IPC"
 }
 
 # ------------------------------------------------------------------- adopt ----
