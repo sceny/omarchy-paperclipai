@@ -279,6 +279,13 @@ at the call catches the next variant.
    `inputs.*` value is read through `env:`, never inside a `run:` line. Each
    `uses:` is pinned to a commit or a tag.
    Check: [`test/test_workflows.py`](../../test/test_workflows.py).
+12. **What the shell keeps across polls has a bound.**
+   Any map or list the shell keeps from one poll to the next, keyed by data
+   from the instance (row keys, run ids), has a size bound that does not depend
+   on how long the shell runs or how many ids the instance makes up, and a test
+   that drives it past the bound. A cut list cannot say a row is gone, so it is
+   no bound.
+   Check: [`test/test_model.mjs`](../../test/test_model.mjs).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a
