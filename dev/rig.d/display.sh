@@ -451,7 +451,7 @@ $(tail -n 8 "$log" 2>/dev/null)"
       rig_wake_parent
       sleep 0.25
     done
-    if tail -n "+$log_from" "$log" | grep -q 'has never been configured'; then
+    if grep -q 'has never been configured' < <(tail -n "+$log_from" "$log"); then
       rig_wake_parent_stop
       RIG_LOST_REASON="xdg_surface never configured"
       return 75

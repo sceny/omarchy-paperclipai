@@ -421,7 +421,7 @@ rig_free_port() {
       ((port == forbidden)) && skip=1
     done
     ((skip)) && continue
-    ss -ltnH "sport = :$port" 2>/dev/null | grep -q . || {
+    grep -q . < <(ss -ltnH "sport = :$port" 2>/dev/null) || {
       printf '%s\n' "$port"
       return 0
     }
@@ -611,7 +611,7 @@ rig_verify_clean() {
 
   for port in ${RIG_HTTP_PORT:-} ${RIG_PG_PORT:-}; do
     [[ -n $port && $port != 0 ]] || continue
-    if ss -ltnH "sport = :$port" 2>/dev/null | grep -q .; then
+    if grep -q . < <(ss -ltnH "sport = :$port" 2>/dev/null); then
       rig_fail "port $port still listening"
       problems=$((problems + 1))
     else
@@ -639,7 +639,7 @@ rig_verify_clean() {
     rig_ok "no process carries the rig tag ${RIG_ID:-<none>}"
   fi
 
-  if [[ -n ${RIG_SESSION:-} ]] && pgrep -f -- "$RIG_SESSION" 2>/dev/null | grep -qvx "$$"; then
+  if [[ -n ${RIG_SESSION:-} ]] && grep -qvx "$$" < <(pgrep -f -- "$RIG_SESSION" 2>/dev/null); then
     rig_fail "processes still reference the session tree:"
     pgrep -af -- "$RIG_SESSION" >&2
     problems=$((problems + 1))
@@ -648,7 +648,7 @@ rig_verify_clean() {
   fi
 
   # The rig never installs a unit; this proves it did not.
-  if systemctl --user list-unit-files 2>/dev/null | grep -q 'omarchy-plugin-rig'; then
+  if grep -q 'omarchy-plugin-rig' < <(systemctl --user list-unit-files 2>/dev/null); then
     rig_fail "a rig systemd unit survives"
     problems=$((problems + 1))
   else

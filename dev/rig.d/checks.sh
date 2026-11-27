@@ -231,7 +231,7 @@ rig_check_host_untouched() {
   rig_assert host-config-untouched "the rig wrote into the owner's plugin directory" \
     bash -c "! test -e '$RIG_HOST_CONFIG_HOME/omarchy/plugins/$RIG_PLUGIN_ID'"
   rig_assert host-shell-alive "the owner's Omarchy shell is no longer running" \
-    bash -c "pgrep -u \"\$(id -u)\" -f 'quickshell.*-p ' | grep -qv '^$RIG_SHELL_PID\$'"
+    bash -c "grep -qv '^$RIG_SHELL_PID\$' < <(pgrep -u \"\$(id -u)\" -f 'quickshell.*-p ')"
   rig_assert host-systemd-unreachable "the sandbox can still reach the owner's user units" \
     bash -c "! systemctl --user show paperclipai.service --property=LoadState >/dev/null 2>&1"
   rig_assert host-paperclip-untouched "the rig's data directory is not inside the sandbox" \
