@@ -44,10 +44,9 @@ st_fake_rig() {
   (
     session=$(rig_new_session_dir)
     rig_define_paths "$session"
-    RIG_VIEW=hidden RIG_HTTP_PORT=0 RIG_PG_PORT=0 RIG_TTL=$2 RIG_OWNER_DESC=selftest
+    RIG_HTTP_PORT=0 RIG_PG_PORT=0 RIG_TTL=$2 RIG_OWNER_DESC=selftest
     rig_create_sandbox
     rig_state_set plugin_id "$RIG_PLUGIN_ID"
-    rig_state_set view hidden
     rig_lease_init "$1" "$2"
     export OPR_RIG_ID=$RIG_ID
     rig_keeper_start >/dev/null 2>&1

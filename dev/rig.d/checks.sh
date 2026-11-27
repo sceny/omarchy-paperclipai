@@ -241,16 +241,12 @@ rig_check_host_untouched() {
 rig_no_rig_client_on_host() { [[ -z $(rig_host_rig_clients) ]]; }
 
 rig_check_hidden() {
-  # The default view must leave no trace on the owner's desktop. The hard part
-  # is asserted; whether the desktop is byte-for-byte the same is reported,
-  # because the owner may be using it while the rig runs.
+  # The rig must leave no trace on the owner's desktop. The hard part is
+  # asserted; whether the desktop is byte-for-byte the same is reported, because
+  # the owner may be using it while the rig runs.
   rig_say "Hidden view"
-  if [[ $RIG_VIEW == hidden ]]; then
-    rig_assert hidden-no-host-window "a window of the rig is on the owner's desktop" \
-      rig_no_rig_client_on_host
-  else
-    rig_warn "the rig is visible on request; the hidden checks do not apply"
-  fi
+  rig_assert hidden-no-host-window "a window of the rig is on the owner's desktop" \
+    rig_no_rig_client_on_host
 
   local before="$RIG_EVIDENCE/host-before.json" after="$RIG_EVIDENCE/host-after-check.json" diff_out
   if [[ ! -s $before ]] || ! jq -e '.available' "$before" >/dev/null 2>&1; then
@@ -381,8 +377,8 @@ rig_write_summary_file() {
   local out="$RIG_EVIDENCE/summary.txt" index
   {
     printf 'rig summary for %s\n' "$RIG_PLUGIN_ID"
-    printf 'view=%s http_port=%s pg_port=%s instance=%s\n' \
-      "$RIG_VIEW" "$RIG_HTTP_PORT" "$RIG_PG_PORT" "$RIG_INSTANCE_ID"
+    printf 'http_port=%s pg_port=%s instance=%s\n' \
+      "$RIG_HTTP_PORT" "$RIG_PG_PORT" "$RIG_INSTANCE_ID"
     printf 'omarchy=%s\n\n' "$RIG_OMARCHY_PATH"
     for index in "${!RIG_CHECK_NAMES[@]}"; do
       printf '%-34s %s\n' "${RIG_CHECK_NAMES[$index]}" "${RIG_CHECK_RESULTS[$index]}"
