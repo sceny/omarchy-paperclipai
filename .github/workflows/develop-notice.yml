@@ -38,13 +38,22 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           body="$RUNNER_TEMP/public-text-notice.md"
+          if grep -q '^public-text-check: out of time:' "$RUNNER_TEMP/public-text.txt"; then
+            title="public-text ran out of time on develop"
+            lead="The \`public-text\` check ran out of time on a push to \`develop\`, so the text was not checked."
+            ending="Run the job again from the run above."
+          else
+            title="public-text failed on develop"
+            lead="The \`public-text\` check failed on a push to \`develop\`."
+            ending="Edit the text that failed, or record here why it stays."
+          fi
           {
-            echo "The \`public-text\` check failed on a push to \`develop\`. The commit is ${COMMIT_URL} and the run is ${RUN_URL}."
+            echo "$lead The commit is ${COMMIT_URL} and the run is ${RUN_URL}."
             echo
             echo "Check output:"
             echo
             sed 's/^/    /' "$RUNNER_TEMP/public-text.txt"
             echo
-            echo "Edit the text that failed, or record here why it stays."
+            echo "$ending"
           } > "$body"
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "public-text failed on develop" --body-file "$body" --assignee "$ACTOR"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body" --assignee "$ACTOR"
