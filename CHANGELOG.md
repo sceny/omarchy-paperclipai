@@ -70,6 +70,12 @@ GitHub release with these notes.
   name is cut at 80 characters, and an id, key or link longer than its limit
   is left out rather than passed on. A report with thousands of rows or
   megabyte names is at most the capped rows of short text.
+- **A toast shows the instance's words as written**: Omarchy draws a toast
+  body with some formatting and turns addresses into links, so the plugin now
+  shows `<` and `>` from the instance as `‹` and `›`, keeps `&` as written,
+  and an address
+  in a toast is text, not a link. A click on the toast still opens the row in
+  Paperclip.
 
 ### Upgrading
 

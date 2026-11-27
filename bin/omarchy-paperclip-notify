@@ -12,7 +12,7 @@ makes. Nothing is parsed as an option on the way.
 One JSON object on the first line of stdin:
 
     summary    plain-text headline
-    body       the description; the caller has already escaped markup in it
+    body       the description; the caller has already made markup and urls inert
     urgency    low | normal | critical          (default normal)
     glyph      the omarchy-glyph hint           (default none)
     appName    the notification's app name      (default Paperclip)

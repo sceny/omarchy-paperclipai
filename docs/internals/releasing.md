@@ -197,7 +197,10 @@ at the call catches the next variant.
 1. **Values from outside never reach a command as an option or a page as markup.**
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
-   is escaped wherever it is rendered as markup. A url from the API opens only
+   is escaped wherever it is rendered as markup. Text from the instance that
+   reaches a notification body is checked against the daemon's own renderer,
+   not against our escape (the vendored `Markup.render` in
+   `test/vendor/omarchy-notifications/`). A url from the API opens only
    on the API's own origin (scheme, host and port), and never with a control
    character in it. A notification's words go
    to the daemon over D-Bus from stdin, not on a command line.

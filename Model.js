@@ -1029,19 +1029,36 @@ function neutralizeOption(text) {
   return /^\s*-/.test(s) ? WORD_JOINER + s : s
 }
 
-// The shell draws a notification body as StyledText, so markup in it is markup.
-function escapeMarkup(text) {
+// Omarchy's daemon does not draw a body as it was sent. Its Markup.render
+// decodes entities up to three times, escapes, puts back b i u s em strong br
+// and <a href>, then makes every bare http(s) url a link, and Toast.qml draws
+// that as StyledText. An escape of ours is decoded before it can hold, however
+// many times it is applied. So the body carries nothing that can become a tag
+// or an entity: < and > become look-alikes (U+2039, U+203A), and a word joiner
+// after each & keeps any entity pattern from reading through it, so the & is
+// drawn as written.
+function inertMarkup(text) {
   return String(text === undefined || text === null ? "" : text)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&/g, "&" + WORD_JOINER).replace(/</g, "\u2039").replace(/>/g, "\u203a")
 }
 
-// The summary is drawn as plain text; the body is not.
+// The daemon turns "scheme://" into a link in the body, and Detect.js takes the
+// first http(s) url of summary or body as the card's link, opened on a click
+// that has no command of its own. A word joiner after the colon prints as
+// nothing and no url pattern reads through it.
+function inertUrls(text) {
+  return String(text === undefined || text === null ? "" : text)
+    .replace(/:(?=\s*[\/\\])/g, ":" + WORD_JOINER)
+}
+
+// The summary is drawn as plain text, so only its urls are broken; the body
+// passes through the daemon's renderer.
 function notificationSummary(text) {
-  return neutralizeOption(text)
+  return neutralizeOption(inertUrls(text))
 }
 
 function notificationBody(text) {
-  return neutralizeOption(escapeMarkup(text))
+  return neutralizeOption(inertUrls(inertMarkup(text)))
 }
 
 // What `bin/omarchy-paperclip-notify` reads from stdin. The words never go on a
@@ -1154,7 +1171,8 @@ if (typeof module !== "undefined" && module.exports) {
     stopConfirmText: stopConfirmText,
     diffNotifications: diffNotifications,
     neutralizeOption: neutralizeOption,
-    escapeMarkup: escapeMarkup,
+    inertMarkup: inertMarkup,
+    inertUrls: inertUrls,
     notificationSummary: notificationSummary,
     notificationBody: notificationBody,
     notificationRequest: notificationRequest,
