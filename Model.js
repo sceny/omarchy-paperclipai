@@ -41,6 +41,13 @@ var DECISION_KINDS = { approval: true, decision: true, issue_thread_interaction:
 // every fifteen minutes must not be able to paper the screen in toasts.
 var MAX_ERROR_TOASTS = 3
 
+// The most row keys the shell remembers as seen. A cut list cannot say a row
+// is gone, so on a busy instance new keys keep coming and none is forgotten;
+// past this many, the keys listed longest ago go first. Four times the largest
+// report the probe writes (100 inbox rows and 25 runs), so a row has to stay
+// out of several full lists before it can speak again.
+var MAX_SEEN_KEYS = 500
+
 // How often the widget reads the instance. Each read asks the server for the
 // attention feed of every company, a heavy query, so the closed bar reads it
 // once a minute; the open panel reads it at least every 20 seconds.
@@ -980,11 +987,12 @@ function diffNotifications(previous, next, level, seen, since) {
 }
 
 // Remembers every row of `next` in `out.seen`; `prune` forgets the rows that
-// are gone, which only a report after a first one can tell.
+// are gone, which only a report after a first one can tell. The map never holds
+// more than MAX_SEEN_KEYS keys, however long the shell runs.
 function markSeen(out, next, prune) {
-  out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
-  out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
+  out.seen = rememberKeys(out.seen, mergeKeys(keysOf(next.needs, "needs"), keysOf(next.moving, "moving")))
   out.seen = forgetHidden(prune ? pruneKeys(out.seen, next) : out.seen, next)
+  out.seen = boundKeys(out.seen, MAX_SEEN_KEYS)
   // The first report starts the cover for the rows it did not list. Once one
   // report has listed every row, every row waiting at the start has been seen,
   // and anything after that is news however old its time.
@@ -1083,6 +1091,36 @@ function mergeKeys(seen, keys) {
   return out
 }
 
+// Each seen key holds the list it came from and the poll that last listed it
+// (`at`, one more than the newest before), so `boundKeys` can tell which keys
+// went unlisted longest. Object order is no guide: a key that looks like a
+// number sorts first.
+function rememberKeys(seen, listed) {
+  var out = {}
+  var tick = 0
+  for (var a in seen) {
+    out[a] = seen[a]
+    if (seenAt(seen[a]) > tick) tick = seenAt(seen[a])
+  }
+  tick++
+  for (var b in listed) out[b] = { list: listed[b], at: tick }
+  return out
+}
+
+function seenAt(entry) {
+  return entry && typeof entry.at === "number" ? entry.at : 0
+}
+
+// Keeps the `max` keys listed most recently and drops the rest.
+function boundKeys(seen, max) {
+  var keys = Object.keys(seen)
+  if (keys.length <= max) return seen
+  keys.sort(function (a, b) { return seenAt(seen[b]) - seenAt(seen[a]) })
+  var out = {}
+  for (var i = 0; i < max; i++) out[keys[i]] = seen[keys[i]]
+  return out
+}
+
 // A cleared row is never counted as seen: when it comes back it is news
 // again, under either inbox filter.
 function forgetHidden(seen, report) {
@@ -1102,11 +1140,11 @@ function pruneKeys(seen, report) {
   var movingWhole = listsEveryRow(report, report.moving, report.working, report.runsStale)
   var out = {}
   for (var key in seen) {
-    var list = seen[key]
+    var list = seen[key] && seen[key].list
     var whole = list === "needs" ? needsWhole
               : list === "moving" ? movingWhole
               : needsWhole && movingWhole
-    if (needs[key] || moving[key] || !whole) out[key] = list
+    if (needs[key] || moving[key] || !whole) out[key] = seen[key]
   }
   return out
 }
@@ -1124,6 +1162,7 @@ if (typeof module !== "undefined" && module.exports) {
     NOTIFY_OFF: NOTIFY_OFF,
     NOTIFY_NEEDED: NOTIFY_NEEDED,
     NOTIFY_ALL: NOTIFY_ALL,
+    MAX_SEEN_KEYS: MAX_SEEN_KEYS,
     INBOX_NEEDS_ME: INBOX_NEEDS_ME,
     INBOX_ALL: INBOX_ALL,
     emptyReport: emptyReport,

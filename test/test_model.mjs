@@ -457,6 +457,56 @@ group("a moment's outage replays nothing", () => {
   assert.ok(fromAll.d3 && fromAll.f1, "an open row past a cut `All` list is kept")
 })
 
+group("the seen keys stay bounded on a busy instance whose lists are never whole", () => {
+  // 200 open rows with 20 listed, 10 live runs with 6 listed, and every poll
+  // brings new ids in both lists: nothing can be forgotten as gone, so only the
+  // bound holds the map. Shell time must not grow with the session.
+  const report = (fields) => Model.parseReport(JSON.stringify(Object.assign({
+    state: "needs-you", reachable: true, attention: 200, working: 10
+  }, fields)))
+  const poll = (n) => report({
+    needs: [{ key: "steady", kind: "approval", title: "Stays" }]
+      .concat(Array.from({ length: 19 }, (_, i) => ({ key: "n" + n + "-" + i, kind: "approval", title: "Row" }))),
+    moving: [{ key: "run:steady", title: "Stays" }]
+      .concat(Array.from({ length: 5 }, (_, i) => ({ key: "run:" + n + "-" + i, title: "Run" })))
+  })
+  for (const level of [Model.NOTIFY_ALL, Model.NOTIFY_OFF]) {
+    let previous = poll(0)
+    let out = Model.diffNotifications(null, previous, level, {}, 0)
+    let largest = 0
+    for (let n = 1; n <= 5000; n++) {
+      const next = poll(n)
+      out = Model.diffNotifications(previous, next, level, out.seen, out.since)
+      const size = Object.keys(out.seen).length
+      if (size > largest) largest = size
+      assert.ok(!out.notifications.some((t) => t.key.endsWith("steady")), level + ": a listed row spoke again")
+      previous = next
+    }
+    assert.ok(largest <= Model.MAX_SEEN_KEYS, level + ": " + largest + " seen keys")
+    assert.equal(largest, Model.MAX_SEEN_KEYS, level + ": the bound is what holds the map")
+    for (const row of previous.needs.concat(previous.moving)) {
+      assert.ok(out.seen[row.key], level + ": the last list is remembered: " + row.key)
+    }
+    assert.ok(!out.seen["n1-0"] && !out.seen["run:1-0"], level + ": the oldest keys went first")
+  }
+
+  // The order is the poll a key was last listed on, not the object's own: a key
+  // that reads as a number sorts first in an object, and still goes when old.
+  let seen = Model.diffNotifications(null, report({ needs: [{ key: "7", title: "Old" }] }),
+                                     Model.NOTIFY_ALL, {}, 0).seen
+  for (let n = 1; n <= Model.MAX_SEEN_KEYS; n++) {
+    seen = Model.diffNotifications(report({}), report({ needs: [{ key: "k" + n, title: "Row" }] }),
+                                   Model.NOTIFY_ALL, seen, 0).seen
+  }
+  assert.ok(!seen["7"] && seen["k1"], "an old key that reads as a number stayed")
+
+  // A report bigger than the bound still leaves the map at the bound.
+  const flood = report({ attention: 2000,
+                         needs: Array.from({ length: 2000 }, (_, i) => ({ key: "f" + i, title: "Row" })) })
+  assert.equal(Object.keys(Model.diffNotifications(null, flood, Model.NOTIFY_ALL, {}, 0).seen).length,
+               Model.MAX_SEEN_KEYS)
+})
+
 group("opening the panel toasts nothing that was waiting at the start", () => {
   // The bar's probe lists 20 rows, the open panel's up to 60; the count is the
   // whole inbox either way. Rows past the first 20 were waiting all along.
