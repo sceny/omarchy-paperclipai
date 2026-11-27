@@ -163,8 +163,14 @@ git rev-parse origin/develop^{tree}
   head, and the checks of the candidate run on the new SHA.
 - The merge is the one into `main` in *Releasing* step 2. The `release` run then
   merges `main` into `develop` with a merge commit, because a release head leaves
-  `develop` with commits `main` does not have. Once the run is done,
+  `develop` with commits `main` does not have (`dev/develop-sync` makes that
+  commit; a conflict fails the run, it never only warns). Once the run is done,
   `git merge-base --is-ancestor origin/main origin/develop` exits 0.
+  Tested in `test/test_develop_sync.py`.
+- The run uses the `release.yml` of the commit pushed to `main`, not
+  `develop`'s: a fix to the release run works from the release that carries it.
+  0.3.0 was cut before the merge above existed, so its run only warned and
+  `develop` was brought level by hand.
 - Tested in `test/test_release_head.py`, which builds the case in a throwaway
   repository: the commit that fails on `develop` passes on the release head.
 

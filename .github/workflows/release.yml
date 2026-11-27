@@ -95,16 +95,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DEVELOP_SYNC_KEY: ${{ secrets.DEVELOP_SYNC_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           git fetch origin develop
-          if git merge-base --is-ancestor origin/develop "$GITHUB_SHA"; then
-            sync="$GITHUB_SHA"
-          else
-            # a release head leaves develop with commits main does not have, and a tree main already has
-            git switch --quiet -c develop-sync origin/develop
-            git merge --no-ff --no-edit -m "Release $VERSION: develop brought level with main" "$GITHUB_SHA"
-            sync=$(git rev-parse HEAD)
-          fi
+          # main itself, or a merge of main into develop after a release head;
+          # a conflict fails the run (test/test_develop_sync.py)
+          sync=$(dev/develop-sync "$GITHUB_SHA" "$VERSION")
           # develop requires a public-text status on every commit it takes; the run
           # writes the commit it pushes, so the status goes on that commit
           gh api "repos/$GITHUB_REPOSITORY/statuses/$sync" -f state=success -f context=public-text \
