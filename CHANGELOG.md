@@ -53,6 +53,10 @@ GitHub release with these notes.
 - **A url with a control character in it is not opened**: a newline, tab or
   other control character after the instance's address is refused before the
   browser sees it.
+- **An id goes into a request only in the server's own shape**: a company,
+  agent or task id holding `/`, `?`, `#`, `..` or any other character outside
+  letters, digits, `-` and `_` is refused before anything is sent, so a
+  request cannot reach another endpoint of the instance.
 
 ## 0.3.0 — 2026-11-05
 

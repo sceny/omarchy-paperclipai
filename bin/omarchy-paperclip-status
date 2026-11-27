@@ -90,6 +90,9 @@ INBOX_FILTERS = ("needs-me", "all")
 # What a redacted report may carry from the server: one short word or id, no
 # spaces. Anything else is written by a person or an agent and is dropped.
 SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,79}$")
+# The server's id shape, and the only thing that goes into a request path. A
+# `.` is left out: `..` would name another endpoint of the same instance.
+PATH_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 # No answer from the API is anywhere near this large. A bigger body is a fault
 # or a hostile listener, and either way is not read to the end.
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -473,7 +476,7 @@ def webapp(name: str) -> dict:
 def safe_token(value) -> str:
     """The value when it is a plain id or enum word, else an empty string."""
     text = str(value or "")
-    return text if SAFE_TOKEN.match(text) else ""
+    return text if SAFE_TOKEN.fullmatch(text) else ""
 
 
 def to_int(value) -> int:
@@ -927,7 +930,7 @@ def probe(args: argparse.Namespace) -> int:
         companies = as_list(payload, "companies")
         for company in companies[:MAX_COMPANIES]:
             # The id goes into URL paths below, and a redacted report prints it.
-            if not isinstance(company, dict) or not safe_token(company.get("id")):
+            if not isinstance(company, dict) or not PATH_ID.fullmatch(str(company.get("id") or "")):
                 continue
             company_label = str(company.get("id")) if args.redacted else (company.get("name") or "a company")
             attention, counts, needs = company_needs(api, company, inbox_items, now, inbox_filter)

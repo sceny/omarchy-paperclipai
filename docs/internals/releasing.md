@@ -199,9 +199,12 @@ at the call catches the next variant.
    Check: [`test/test_doctor_session.mjs`](../../test/test_doctor_session.mjs).
 3. **HTTP clients are boxed in.**
    They follow no redirects, cap response size, and send nothing, token or not,
-   except to an own-uid loopback listener or over https.
+   except to an own-uid loopback listener or over https. An id goes into a
+   request path only in the server's id shape (letters, digits, `-`, `_`); any
+   other text in a path is quoted.
    Check: [`test/test_transport.py`](../../test/test_transport.py),
-   [`test/test_transport.mjs`](../../test/test_transport.mjs).
+   [`test/test_transport.mjs`](../../test/test_transport.mjs),
+   [`test/test_inbox.mjs`](../../test/test_inbox.mjs).
 4. **State is private and does not pile up.**
    Files under the state directory are created with umask 077. Private text has
    a retention limit; a token file others can read is not used.
