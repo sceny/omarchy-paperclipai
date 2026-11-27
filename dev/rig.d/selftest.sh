@@ -63,7 +63,7 @@ st_none_of() { st_wait 5 st_no_tagged "$1"; }
 st_no_tagged() { [[ -z $(rig_tagged_pids "$1") ]]; }
 st_some_of() { [[ -n $(rig_tagged_pids "$1") ]]; }
 st_gone() { [[ ! -e $RIG_TMP_ROOT/$1 && ! -e $RIG_RUNTIME_ROOT/opr.${1##*.} ]]; }
-st_listed() { cmd_ps | grep -q "$1"; }
+st_listed() { grep -qF -- "$1" < <(cmd_ps); }
 st_lease() { [[ $(rig_lease_state "$RIG_TMP_ROOT/$1") == "$2" ]]; }
 st_nested_teardown() {
   # st_nested_teardown <rig id> — a teardown started while this process holds the lock returns at once.
@@ -202,7 +202,7 @@ cmd_selftest() {
   st_check "rig A has tagged processes" st_some_of "$a"
   st_check "rig B has tagged processes" st_some_of "$b"
   st_check "the two rigs' process sets do not overlap" \
-    st_expr '! comm -12 <(rig_tagged_pids "$a" | sort) <(rig_tagged_pids "$b" | sort) | grep -q .'
+    st_expr '! grep -q . < <(comm -12 <(rig_tagged_pids "$a" | sort) <(rig_tagged_pids "$b" | sort))'
   st_check "ps shows rig A" st_listed "$a"
   st_check "ps shows rig B" st_listed "$b"
   st_check "rig A lease is live" st_lease "$a" live
@@ -216,7 +216,7 @@ cmd_selftest() {
   st_check "no process of rig A is left (plain or detached)" st_none_of "$a"
   st_check "rig B is untouched" st_expr '[[ -d $RIG_TMP_ROOT/$b ]]'
   st_check "rig B processes still run" st_some_of "$b"
-  st_check "ps no longer lists rig A" st_expr '! cmd_ps | grep -q "$a"'
+  st_check "ps no longer lists rig A" st_expr '! grep -qF -- "$a" < <(cmd_ps)'
 
   rig_say "TTL runs out"
   owner_c=$owner_b
@@ -231,7 +231,7 @@ cmd_selftest() {
   kill -9 "$(<"$RIG_TMP_ROOT/$d/keeper.pid")"
   kill -9 "$owner_a"
   wait "$owner_a" 2>/dev/null || true
-  st_check "ps calls the rig orphaned" st_wait 5 st_expr 'cmd_ps | grep -q orphaned'
+  st_check "ps calls the rig orphaned" st_wait 5 st_expr 'grep -q orphaned < <(cmd_ps)'
   st_check "reap runs" st_expr 'cmd_reap >/dev/null 2>&1'
   st_check "its directories are gone" st_gone "$d"
   st_check "its processes are gone" st_none_of "$d"
@@ -241,7 +241,7 @@ cmd_selftest() {
     export OPR_RIG_ID=leaked.20000101-000000.abcdef
     setsid sleep 600 &
   )
-  st_check "ps reports it as leaked" st_wait 5 st_expr 'cmd_ps | grep -q "leaked processes"'
+  st_check "ps reports it as leaked" st_wait 5 st_expr 'grep -q "leaked processes" < <(cmd_ps)'
   st_check "verify-clean fails while it exists" st_expr '! cmd_verify_clean'
   st_check "reap ends it" \
     st_expr 'cmd_reap >/dev/null 2>&1; [[ -z $(rig_tagged_pids leaked.20000101-000000.abcdef) ]]'
