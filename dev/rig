@@ -233,10 +233,10 @@ cmd_up() {
   cat >&2 <<INFO
 
   Next:
-    dev/rig install                add the plugin to the bar
-    dev/rig seed                   a busy panel: live runs and inbox rows
     dev/rig check                  run the checks (they expect no plugin yet)
-    dev/rig screenshot shot.png    capture the shell (works while hidden)
+    dev/rig install                a hand check: add the plugin to the bar (use a rig of its own)
+    dev/rig seed                   a busy panel: live runs and inbox rows
+    dev/rig screenshot shot.png    capture the shell
     dev/rig exec -- omarchy plugin list
     dev/rig down                   tear it down
 
