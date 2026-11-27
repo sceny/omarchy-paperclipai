@@ -33,8 +33,14 @@ Titles, details, names, `whyNow` and every other string from the API or from an
 agent are written by someone else. The plugin treats them as data:
 
 - **Never markup.** Wherever one is shown as text it is shown as plain text
-  (`textFormat: Text.PlainText`), and wherever a notification daemon would read
-  it as markup it is escaped first.
+  (`textFormat: Text.PlainText`). A toast body is not escaped, because
+  Omarchy's daemon decodes entities (up to three passes) before it puts back
+  the tags it allows and links bare urls, so an escape does not survive it.
+  Instead the body carries no `<` or `>` (they become `‹` and `›`), no `&`
+  that can start an entity (a word joiner follows it) and no url (a word joiner follows the colon of `scheme://`). The summary,
+  drawn as plain text, keeps its characters but has its urls broken the same
+  way, so no url in it becomes the card's link. The check feeds the body
+  through the daemon's own renderer, not through our escape.
 - **Never an option.** Passed to a command, it cannot be read as an option: a
   value with a leading `-` is neutralised, or follows `--`.
 - **Never on a command line.** Other users of the machine can read the command

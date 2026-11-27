@@ -10,6 +10,7 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { readFileSync } from "node:fs"
+import vm from "node:vm"
 
 const require = createRequire(import.meta.url)
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -881,13 +882,15 @@ group("text from the instance is inert in a notification", () => {
       assert.ok(out.endsWith(hostile), "the words are kept")
     }
   }
-  assert.equal(Model.notificationBody("<b>x</b>"), "&lt;b&gt;x&lt;/b&gt;")
-  assert.equal(Model.notificationBody("a & b"), "a &amp; b")
-  assert.equal(Model.notificationBody("&lt;"), "&amp;lt;", "an entity is not decoded twice")
-  assert.equal(Model.notificationBody("-<b>"), WJ + "-&lt;b&gt;")
-  // The summary is drawn as plain text, so it is not escaped.
+  assert.equal(Model.notificationBody("<b>x</b>"), "\u2039b\u203ax\u2039/b\u203a")
+  assert.equal(Model.notificationBody("a & b"), "a &" + WJ + " b")
+  assert.equal(Model.notificationBody("&lt;"), "&" + WJ + "lt;", "no entity is left to decode")
+  assert.equal(Model.notificationBody("-<b>"), WJ + "-\u2039b\u203a")
+  assert.equal(Model.notificationBody("see https://x.example/a"), "see https:" + WJ + "//x.example/a")
+  // The summary is drawn as plain text, so it keeps its characters; only a url is broken.
   assert.equal(Model.notificationSummary("a <b> & c"), "a <b> & c")
   assert.equal(Model.notificationSummary("Fix the build"), "Fix the build")
+  assert.equal(Model.notificationSummary("see http://x.example"), "see http:" + WJ + "//x.example")
   assert.equal(Model.notificationBody("-50% off"), WJ + "-50% off")
   assert.equal(Model.notificationBody(undefined), "")
   assert.equal(Model.notificationBody(null), "")
@@ -902,7 +905,65 @@ group("text from the instance is inert in a notification", () => {
   assert.equal(diff.notifications.length, 1)
   const n = diff.notifications[0]
   assert.ok(Model.notificationSummary(n.summary).startsWith(WJ))
-  assert.equal(Model.notificationBody(n.body), "&lt;img src=x&gt;")
+  assert.equal(Model.notificationBody(n.body), "\u2039img src=x\u203a")
+})
+
+// Omarchy's notification daemon renders a body itself (Markup.render: entity
+// decode up to three passes, the allowed tags and <a href> put back, bare urls
+// linked) and draws the result as StyledText. Our text is checked against that
+// renderer, not against our own escape. CI has no Omarchy, so the two files are
+// vendored and pinned in test/vendor/omarchy-notifications/README.md.
+function loadOmarchyMarkup() {
+  const dir = path.join(root, "test", "vendor", "omarchy-notifications")
+  const qmlJs = (name) => readFileSync(path.join(dir, name), "utf8").replace(/^\.(pragma|import)\b.*$/gm, "")
+  const Security = vm.createContext({})
+  vm.runInContext(qmlJs("Security.js"), Security)
+  const Markup = vm.createContext({ Security })
+  vm.runInContext(qmlJs("Markup.js"), Markup)
+  return Markup
+}
+
+group("text from the instance is drawn inert by Omarchy's own renderer", () => {
+  const Markup = loadOmarchyMarkup()
+  // The renderer is live: unprotected, these do become tags and links.
+  assert.match(Markup.render('&lt;a href="https://pay.example/x"&gt;Open&lt;/a&gt;'), /<a href=/)
+  assert.match(Markup.render("&amp;lt;b&amp;gt;x"), /<b>/)
+  assert.match(Markup.render("see https://evil.example/x"), /<a href=/)
+
+  const hostile = [
+    '<a href="https://pay.example/approve">Open the approval in Paperclip</a>',
+    '&lt;a href="https://pay.example/approve"&gt;Open&lt;/a&gt;',
+    '&amp;lt;a href=&amp;quot;https://pay.example/&amp;quot;&amp;gt;Open&amp;lt;/a&amp;gt;',
+    '&amp;amp;lt;b&amp;amp;gt;triple&amp;amp;lt;/b&amp;amp;gt;',
+    "&amp;lt;b&amp;gt;URGENT&amp;lt;/b&amp;gt;",
+    "<b>URGENT</b> see https://evil.example/x",
+    "<i>i</i> <u>u</u> <s>s</s> <em>em</em> <strong>st</strong> <br/>",
+    "&#60;b&#62;dec&#60;/b&#62; &#x3c;i&#x3e;hex&#x3c;/i&#x3e;",
+    "<a href='mailto:x@evil.example'>mail</a>",
+    "http://evil.example HTTPS://EVIL.EXAMPLE https: //evil.example",
+    "https:\\\\evil.example",
+    "-<b>dash</b>"
+  ]
+  // No tag at all but the line breaks the renderer adds, so no <a, <b, <i,
+  // <u, <s and no href inside a tag.
+  const banned = /<(?!br\/>)|<[^>]*href/i
+  for (const text of hostile) {
+    const row = { key: "r:1", kind: "issue_thread_interaction", title: text, detail: text, severity: "normal" }
+    const diff = Model.diffNotifications(
+      { reachable: true, needs: [], moving: [] },
+      { reachable: true, needs: [row], moving: [] },
+      Model.NOTIFY_NEEDED, {})
+    assert.equal(diff.notifications.length, 1)
+    const req = Model.notificationRequest(diff.notifications[0], "Paperclip", "F", ["/p/open"])
+    const drawn = Markup.render(req.body)
+    assert.ok(!banned.test(drawn), JSON.stringify(text) + " was drawn as " + JSON.stringify(drawn))
+    assert.ok(!banned.test(Markup.oneLine(req.body)), "the one-line body of " + JSON.stringify(text))
+    // The summary is drawn as plain text; no url in it is a card's link either.
+    assert.ok(!/https?:\/\//i.test(req.summary + "\n" + req.body), JSON.stringify(req))
+  }
+  // The words still read as written.
+  assert.equal(Markup.render(Model.notificationBody("Ship 1.2 & tag <v1>")), "Ship 1.2 &amp;\u2060 tag \u2039v1\u203a")
+  assert.equal(Markup.oneLine(Model.notificationBody("a &amp; b")), "a &\u2060amp; b")
 })
 
 group("a notification request carries the words as data for the helper", () => {
@@ -911,7 +972,7 @@ group("a notification request carries the words as data for the helper", () => {
   const exec = ["/p/open", "https://127.0.0.1:3100/PAP-1"]
   const req = Model.notificationRequest(item, "Paperclip", "F", exec)
   assert.deepEqual(req, { appName: "Paperclip", urgency: "critical", glyph: "G",
-    summary: WJ + "--app-name=x", body: "&lt;b&gt;why&lt;/b&gt;", exec })
+    summary: WJ + "--app-name=x", body: "\u2039b\u203awhy\u2039/b\u203a", exec })
   const bare = Model.notificationRequest({}, "", "F", [])
   assert.deepEqual(bare, { appName: "Paperclip", urgency: "normal", glyph: "F",
     summary: "Paperclip", body: "" })
