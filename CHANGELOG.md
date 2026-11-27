@@ -6,23 +6,19 @@ Each version, newest first, grouped by what it touches. `omarchy plugin
 update sceny.paperclipai` brings the latest; each is a tag (`vX.Y.Z`) and a
 GitHub release with these notes.
 
-## Unreleased
+## 0.3.1 — 2026-11-27
 
-### Upgrading
+### Highlights
 
-- **The widget reads Paperclip once a minute** (was every 20 seconds), and
-  at least every 20 seconds while the panel is open (was 10). Each read asks
-  the server for every company's inbox, which is heavy on a busy instance.
-  The new default applies only where *Refresh interval* was never set; an
-  interval you chose is kept. An action you take still refreshes the panel
-  right after it. With the panel closed, the `All` filter reads only the open
-  inbox, one query per company: the rows you cleared are fetched when the
-  panel opens.
-- **Desktop notifications at `Needs-me` are for pending decisions only**: an
-  approval, a question or confirmation an agent asked, a join request. Reviews,
-  blockers, budget alerts, failed runs and the instance stopping no longer
-  raise a toast at this level; they stay in the panel and the bar count, and
-  `Everything` still announces them. The stored setting is unchanged.
+- **Quieter on a busy instance**: the widget reads Paperclip once a minute
+  (every 20 seconds with the panel open), and the closed bar asks for the
+  open inbox only.
+- **Toasts only for what is new and needs you**: `Needs-me` raises a toast
+  for pending decisions alone, and an outage, turning notifications back on,
+  opening the panel or a row snoozed in Paperclip no longer replays the inbox.
+- **Hardening**: a whole answer from the instance has a deadline, ids and
+  urls are checked before they are used, and the status report stays small
+  whatever the instance sends.
 
 ### Fixes
 
@@ -74,6 +70,42 @@ GitHub release with these notes.
   name is cut at 80 characters, and an id, key or link longer than its limit
   is left out rather than passed on. A report with thousands of rows or
   megabyte names is at most the capped rows of short text.
+
+### Upgrading
+
+- **The widget reads Paperclip once a minute** (was every 20 seconds), and
+  at least every 20 seconds while the panel is open (was 10). Each read asks
+  the server for every company's inbox, which is heavy on a busy instance.
+  The new default applies only where *Refresh interval* was never set; an
+  interval you chose is kept. An action you take still refreshes the panel
+  right after it. With the panel closed, the `All` filter reads only the open
+  inbox, one query per company: the rows you cleared are fetched when the
+  panel opens.
+- **Desktop notifications at `Needs-me` are for pending decisions only**: an
+  approval, a question or confirmation an agent asked, a join request. Reviews,
+  blockers, budget alerts, failed runs and the instance stopping no longer
+  raise a toast at this level; they stay in the panel and the bar count, and
+  `Everything` still announces them. The stored setting is unchanged.
+
+### Issues
+
+- [#120](https://github.com/sceny/omarchy-paperclipai/issues/120) Notifications: Needs-me should toast pending decisions only
+- [#123](https://github.com/sceny/omarchy-paperclipai/issues/123) Notifications: a moment's outage replays every inbox row as a toast
+- [#124](https://github.com/sceny/omarchy-paperclipai/issues/124), [#130](https://github.com/sceny/omarchy-paperclipai/issues/130) The snooze-over count and the bar's count under the All filter include snoozed and cleared rows
+- [#126](https://github.com/sceny/omarchy-paperclipai/issues/126) Turning notifications back on replays what arrived while they were Off
+- [#127](https://github.com/sceny/omarchy-paperclipai/issues/127) Opening the panel for the first time toasts the rows past the bar's short list
+- [#132](https://github.com/sceny/omarchy-paperclipai/issues/132), [#134](https://github.com/sceny/omarchy-paperclipai/issues/134) Read the attention feed less often, and once per company under either filter
+- [#99](https://github.com/sceny/omarchy-paperclipai/issues/99), [#131](https://github.com/sceny/omarchy-paperclipai/issues/131) Regression and self-test rows that could not fail, or failed once
+- [#100](https://github.com/sceny/omarchy-paperclipai/issues/100), [#107](https://github.com/sceny/omarchy-paperclipai/issues/107) The process-list check: more tools, argv lists and prefix commands
+- [#108](https://github.com/sceny/omarchy-paperclipai/issues/108), [#110](https://github.com/sceny/omarchy-paperclipai/issues/110), [#137](https://github.com/sceny/omarchy-paperclipai/issues/137), [#140](https://github.com/sceny/omarchy-paperclipai/issues/140), [#141](https://github.com/sceny/omarchy-paperclipai/issues/141) The `public-text` check: its rules, drift from Devices, and its runs on `develop`
+- [#139](https://github.com/sceny/omarchy-paperclipai/issues/139), [#148](https://github.com/sceny/omarchy-paperclipai/issues/148), [#149](https://github.com/sceny/omarchy-paperclipai/issues/149) develop-notice: a merge-queue push assigns its notice
+
+### Pull requests without an issue
+
+- [#125](https://github.com/sceny/omarchy-paperclipai/pull/125) Notifications: a row snoozed in Paperclip stays out of the plugin
+- [#146](https://github.com/sceny/omarchy-paperclipai/pull/146) After 0.3.0: probe deadline, untrusted-address action, browser umask, stop marker, hardening
+- [#97](https://github.com/sceny/omarchy-paperclipai/pull/97), [#111](https://github.com/sceny/omarchy-paperclipai/pull/111), [#118](https://github.com/sceny/omarchy-paperclipai/pull/118), [#122](https://github.com/sceny/omarchy-paperclipai/pull/122), [#142](https://github.com/sceny/omarchy-paperclipai/pull/142), [#145](https://github.com/sceny/omarchy-paperclipai/pull/145) Releasing: the reviewer, the release head, the owner's folder, bringing `develop` level with `main`
+- [#102](https://github.com/sceny/omarchy-paperclipai/pull/102), [#105](https://github.com/sceny/omarchy-paperclipai/pull/105), [#106](https://github.com/sceny/omarchy-paperclipai/pull/106), [#112](https://github.com/sceny/omarchy-paperclipai/pull/112), [#114](https://github.com/sceny/omarchy-paperclipai/pull/114), [#116](https://github.com/sceny/omarchy-paperclipai/pull/116), [#143](https://github.com/sceny/omarchy-paperclipai/pull/143), [#144](https://github.com/sceny/omarchy-paperclipai/pull/144), [#147](https://github.com/sceny/omarchy-paperclipai/pull/147), [#152](https://github.com/sceny/omarchy-paperclipai/pull/152) The `public-text` and develop-notice checks, and the rig's pipe into `grep -q`
 
 ## 0.3.0 — 2026-11-05
 
