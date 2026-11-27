@@ -166,7 +166,10 @@ git rev-parse origin/develop^{tree}
   `develop` with commits `main` does not have (`dev/develop-sync` makes that
   commit; a conflict fails the run, it never only warns). Once the run is done,
   `git merge-base --is-ancestor origin/main origin/develop` exits 0.
-  Tested in `test/test_develop_sync.py`.
+  `develop` takes only a commit with a `public-text` status, and GitHub takes a
+  status only on a commit it has, so the run pushes that merge to a
+  `develop-sync-X.Y.Z` branch, sets the status, pushes it to `develop` and
+  deletes the branch. Tested in `test/test_develop_sync.py`.
 - The run uses the `release.yml` of the commit pushed to `main`, not
   `develop`'s: a fix to the release run works from the release that carries it.
   0.3.0 was cut before the merge above existed, so its run only warned and

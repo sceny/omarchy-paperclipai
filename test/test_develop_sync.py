@@ -1,8 +1,8 @@
 """dev/develop-sync in a throwaway repository with its own origin, as the release run
 uses it: after a fast-forward release, after a release head (develop has commits main
 does not), when develop moved on after the candidate, when main is already in
-develop, and on a conflict. The release workflow pushes what it prints and has no
-path that only warns."""
+develop, and on a conflict. The release workflow pushes what it prints, after the
+commit's public-text status, and has no path that only warns."""
 
 import os
 import re
@@ -126,6 +126,11 @@ class DevelopSync(unittest.TestCase):
         step = re.search(r"- name: Bring develop level with main\n(.*?)(?=\n      - name: )", text, re.S).group(1)
         self.assertIn('sync=$(dev/develop-sync "$GITHUB_SHA" "$VERSION")', step)
         self.assertIn('"$sync:refs/heads/develop"', step)
+        # the status needs the commit on GitHub, and develop needs the status
+        staged = step.index('push "$sync:$staging"')
+        status = step.index('statuses/$sync')
+        self.assertLess(staged, status)
+        self.assertLess(status, step.index('push "$sync:refs/heads/develop"'))
         self.assertNotIn("::warning::", step)
         self.assertNotRegex(step, r"\|\| *true")
 
