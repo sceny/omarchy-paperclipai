@@ -112,6 +112,7 @@ GitHub release with these notes.
 
 ### Pull requests without an issue
 
+- [#155](https://github.com/sceny/omarchy-paperclipai/pull/155) Notifications: the instance's words in a toast body as written
 - [#125](https://github.com/sceny/omarchy-paperclipai/pull/125) Notifications: a row snoozed in Paperclip stays out of the plugin
 - [#113](https://github.com/sceny/omarchy-paperclipai/pull/113) follow-develop: report a plugin folder skipped for more than a day
 - [#97](https://github.com/sceny/omarchy-paperclipai/pull/97), [#111](https://github.com/sceny/omarchy-paperclipai/pull/111), [#118](https://github.com/sceny/omarchy-paperclipai/pull/118), [#122](https://github.com/sceny/omarchy-paperclipai/pull/122), [#142](https://github.com/sceny/omarchy-paperclipai/pull/142) Releasing: the reviewer, the release head, the owner's folder, bringing `develop` level with `main`
