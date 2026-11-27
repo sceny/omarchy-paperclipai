@@ -40,6 +40,9 @@ GitHub release with these notes.
   by default) now bounds the whole answer, connection and body together. A
   listener that sent a byte every few seconds kept one read going for as long
   as it liked.
+- **No *Create the web app* at an address that is not your Paperclip**: when
+  another program holds Paperclip's address, the panel shows the problem and
+  offers nothing that opens or creates something there.
 
 ## 0.3.0 — 2026-11-05
 

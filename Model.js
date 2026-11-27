@@ -525,6 +525,9 @@ function primaryAction(report, pending) {
   if (state === "probe-failed") {
     return { id: "doctor", label: "Fix it with your agent", detail: "The status probe itself failed" }
   }
+  // The address is not Paperclip's: nothing that opens or creates something
+  // there is offered. The problem line is the only thing to read.
+  if (state === "untrusted-listener") return null
   if (!report.webapp || !report.webapp.installed) {
     return { id: "webapp", label: "Create the web app", detail: "Add Paperclip to the app launcher" }
   }

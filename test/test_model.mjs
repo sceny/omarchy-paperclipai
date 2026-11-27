@@ -924,6 +924,15 @@ group("the footer offers the service key only when it does something", () => {
   assert.equal(Model.primaryAction(down, "").id, "start")
 })
 
+group("no action is offered at an address that is not Paperclip's", () => {
+  const noWebapp = { webapp: { installed: false } }
+  assert.equal(Model.primaryAction(Object.assign({ state: "idle", reachable: true }, noWebapp)).id, "webapp")
+  for (const extra of [noWebapp, {}, { webapp: { installed: true } }]) {
+    const report = Object.assign({ state: "untrusted-listener", reachable: false }, extra)
+    assert.equal(Model.primaryAction(report, ""), null, JSON.stringify(extra))
+  }
+})
+
 // "Keep Paperclip running": a stop seen from outside the panel is not undone.
 group("auto-start step", () => {
   const down = (unit, extra) => Object.assign({ state: "stopped", reachable: false,
