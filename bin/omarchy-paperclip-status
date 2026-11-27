@@ -98,6 +98,14 @@ PATH_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 MAX_BODY_BYTES = 4 * 1024 * 1024
 # The largest count a report carries. Anything bigger is not a real inbox.
 MAX_COUNT = 10**9
+# The report goes into the shell every plugin shares, so every string in it is
+# bounded. Text is cut (`short`); an id, a key or a link is kept whole or left
+# out (`whole`), since a cut one would name something else.
+NAME_LIMIT = 80
+ID_LIMIT = 120
+LINK_LIMIT = 512
+# The inbox's kinds are a short fixed list on the server; more is not an inbox.
+MAX_COUNT_KINDS = 32
 PROC_TCP_FILES = ("/proc/net/tcp", "/proc/net/tcp6")
 TCP_LISTEN = "0A"
 
@@ -498,6 +506,18 @@ def short(text, limit: int = 120) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+def whole(value, limit: int = ID_LIMIT) -> str:
+    """The value as text when it fits in `limit`, else an empty string."""
+    text = str(value or "")
+    return text if len(text) <= limit else ""
+
+
+def link(api: "Api", href) -> str:
+    """A row's url: a path on the instance, or the server's own full url."""
+    text = whole(href, LINK_LIMIT)
+    return (api.base + text) if text.startswith("/") else text
+
+
 def age(iso: str, now: float) -> str:
     """"4m" / "2h" — how long this has been going on."""
     text = str(iso or "").strip()
@@ -542,13 +562,13 @@ def hidden_state(raw: dict, now: float):
     cleared) and says which with `isActive`. A spent one hides nothing: the row
     is back in the open inbox and is news again.
     """
-    own = str(raw.get("snoozedUntil") or "")
+    own = whole(raw.get("snoozedUntil"), 40)
     if own and epoch(own) > now:
         return own, False
     dismissal = raw.get("dismissal") if isinstance(raw.get("dismissal"), dict) else None
     if dismissal is None:
         return "", False
-    until = str(dismissal.get("snoozedUntil") or "")
+    until = whole(dismissal.get("snoozedUntil"), 40)
     snooze = dismissal.get("kind") == "snooze" or bool(until)
     active = dismissal.get("isActive")
     if not isinstance(active, bool):
@@ -579,26 +599,26 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
     subject = raw.get("subject") if isinstance(raw.get("subject"), dict) else {}
     meta = subject.get("metadata") if isinstance(subject.get("metadata"), dict) else {}
     related = raw.get("relatedIssue") if isinstance(raw.get("relatedIssue"), dict) else {}
-    kind = str(raw.get("sourceKind") or "")
+    kind = safe_token(raw.get("sourceKind"))
     retry_kind = RETRY_KINDS.get(kind, "")
 
-    href = str(subject.get("href") or related.get("href") or "")
+    href = subject.get("href") or related.get("href") or ""
     snoozed, cleared = hidden_state(raw, now)
 
     row = {
-        "key": str(raw.get("id") or raw.get("dedupKey") or "%s:%s" % (kind, subject.get("id"))),
+        "key": whole(raw.get("id") or raw.get("dedupKey") or "%s:%s" % (kind, subject.get("id"))),
         "kind": kind,
         # A failed run has no identifier of its own, so it borrows the task's:
         # "SCE-250 Kai run failed" is traceable, "Kai run failed" is not.
-        "identifier": str(subject.get("identifier") or related.get("identifier") or ""),
+        "identifier": whole(subject.get("identifier") or related.get("identifier"), 40),
         "title": short(subject.get("title") or kind or "Needs you"),
         "detail": short(raw.get("whyNow") or "", 110),
-        "severity": str(raw.get("severity") or "normal"),
-        "company": str(company.get("name") or ""),
-        "companyId": str(company.get("id") or ""),
+        "severity": safe_token(raw.get("severity")) or "normal",
+        "company": short(company.get("name"), NAME_LIMIT),
+        "companyId": whole(company.get("id")),
         "ago": age(raw.get("activityAt") or raw.get("updatedAt") or "", now),
-        "url": (api.base + href) if href.startswith("/") else href,
-        "itemKey": str(raw.get("dismissalKey") or ""),
+        "url": link(api, href),
+        "itemKey": whole(raw.get("dismissalKey"), 2 * ID_LIMIT),
         "retryKind": retry_kind,
         "retryable": bool(retry_kind),
         "isError": kind in ERROR_KINDS,
@@ -611,14 +631,14 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
     }
 
     if kind == "failed_run":
-        row["runId"] = str(subject.get("id") or "")
-        row["agentId"] = str(meta.get("agentId") or "")
-        row["issueId"] = str(meta.get("issueId") or related.get("id") or "")
+        row["runId"] = whole(subject.get("id"))
+        row["agentId"] = whole(meta.get("agentId"))
+        row["issueId"] = whole(meta.get("issueId") or related.get("id"))
     elif kind == "recovery_action":
-        row["actionId"] = str(subject.get("id") or "")
-        row["issueId"] = str(meta.get("sourceIssueId") or related.get("id") or "")
+        row["actionId"] = whole(subject.get("id"))
+        row["issueId"] = whole(meta.get("sourceIssueId") or related.get("id"))
     elif subject.get("kind") == "issue":
-        row["issueId"] = str(subject.get("id") or "")
+        row["issueId"] = whole(subject.get("id"))
 
     # A retry needs every id its call takes. Advertising a button that cannot
     # be pressed is worse than not drawing one.
@@ -695,7 +715,7 @@ def company_moving(api: Api, company: dict, limit: int, now: float):
     names = {}
     for agent in as_list(api.get("/api/companies/%s/agents" % cid), "agents"):
         if isinstance(agent, dict) and agent.get("id"):
-            names[agent["id"]] = str(agent.get("name") or "")
+            names[agent["id"]] = short(agent.get("name"), NAME_LIMIT)
 
     by_run = {}
     issues = as_list(
@@ -710,11 +730,12 @@ def company_moving(api: Api, company: dict, limit: int, now: float):
     for run in live:
         issue = by_run.get(run.get("id")) or {}
         agent = names.get(run.get("agentId")) or "An agent"
-        identifier = str(issue.get("identifier") or "")
+        identifier = whole(issue.get("identifier"), 40)
         title = short(issue.get("title") or "working", 90)
-        href = str(issue.get("href") or "")
-        if not href and identifier and company.get("issuePrefix"):
-            href = "/%s/issues/%s" % (company["issuePrefix"], identifier)
+        href = whole(issue.get("href"), LINK_LIMIT)
+        prefix = whole(company.get("issuePrefix"), 40)
+        if not href and identifier and prefix:
+            href = "/%s/issues/%s" % (prefix, identifier)
         detail = agent
         elapsed = age(run.get("startedAt") or "", now)
         if elapsed:
@@ -722,13 +743,13 @@ def company_moving(api: Api, company: dict, limit: int, now: float):
         if str(run.get("status")) != "running":
             detail += " · " + str(run.get("status"))
         rows.append({
-            "key": "run:" + str(run.get("id") or ""),
+            "key": "run:" + whole(run.get("id")),
             "identifier": identifier,
             "title": title,
             "detail": detail,
             "agent": agent,
-            "company": str(company.get("name") or ""),
-            "url": (api.base + href) if href.startswith("/") else href,
+            "company": short(company.get("name"), NAME_LIMIT),
+            "url": link(api, href),
         })
     rows.sort(key=lambda row: row.get("identifier") or "")
     return len(live), rows[:limit], failed
@@ -932,7 +953,8 @@ def probe(args: argparse.Namespace) -> int:
             # The id goes into URL paths below, and a redacted report prints it.
             if not isinstance(company, dict) or not PATH_ID.fullmatch(str(company.get("id") or "")):
                 continue
-            company_label = str(company.get("id")) if args.redacted else (company.get("name") or "a company")
+            company_label = str(company.get("id")) if args.redacted else (
+                short(company.get("name"), NAME_LIMIT) or "a company")
             attention, counts, needs = company_needs(api, company, inbox_items, now, inbox_filter)
             if attention is None:
                 report["problems"].append(
@@ -950,11 +972,14 @@ def probe(args: argparse.Namespace) -> int:
             report["needs"].extend(needs)
             report["moving"].extend(moving)
             for kind, value in counts.items():
-                report["inboxCounts"][kind] = report["inboxCounts"].get(kind, 0) + to_int(value)
+                kind = safe_token(kind)
+                if kind and (kind in report["inboxCounts"]
+                             or len(report["inboxCounts"]) < MAX_COUNT_KINDS):
+                    report["inboxCounts"][kind] = report["inboxCounts"].get(kind, 0) + to_int(value)
             report["companies"].append({
                 "id": str(company.get("id")),
-                "name": str(company.get("name") or ""),
-                "prefix": str(company.get("issuePrefix") or ""),
+                "name": short(company.get("name"), NAME_LIMIT),
+                "prefix": whole(company.get("issuePrefix"), 40),
                 "attention": attention,
                 "working": working,
             })

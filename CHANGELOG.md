@@ -62,6 +62,10 @@ GitHub release with these notes.
   agent or task id holding `/`, `?`, `#`, `..` or any other character outside
   letters, digits, `-` and `_` is refused before anything is sent, so a
   request cannot reach another endpoint of the instance.
+- **The status report stays small whatever the instance answers**: every
+  name is cut at 80 characters, and an id, key or link longer than its limit
+  is left out rather than passed on. A report with thousands of rows or
+  megabyte names is at most the capped rows of short text.
 
 ## 0.3.0 — 2026-11-05
 
