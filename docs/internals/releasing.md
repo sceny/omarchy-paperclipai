@@ -165,6 +165,10 @@ git rev-parse origin/develop^{tree}
   merges `main` into `develop` with a merge commit, because a release head leaves
   `develop` with commits `main` does not have. Once the run is done,
   `git merge-base --is-ancestor origin/main origin/develop` exits 0.
+- A back-merge made by hand (a conflict the run cannot merge) is on a branch
+  named `merge-main-X.Y.Z-into-develop`, never a task's branch: GitHub's merge
+  message names the head branch, and `develop`'s `public-text` check reads that
+  message.
 - Tested in `test/test_release_head.py`, which builds the case in a throwaway
   repository: the commit that fails on `develop` passes on the release head.
 
