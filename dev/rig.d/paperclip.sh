@@ -281,11 +281,36 @@ rig_pc_api() {
   curl "${args[@]}" "$(rig_pc_api_base)$path"
 }
 
+rig_pc_list() {
+  # rig_pc_list <path> — every row of a list endpoint, one JSON object per line.
+  # Pages are read until one comes back empty, so a server that caps its page
+  # size still gives every row. A server that ignores the offset hands back the
+  # first page again; that is refused, never counted twice.
+  local path=$1 offset=0 page count first prev=""
+  while :; do
+    page=$(rig_pc_api GET "$path?limit=100&offset=$offset") || return 1
+    count=$(jq 'length' <<<"$page") || return 1
+    ((count > 0)) || return 0
+    first=$(jq -r '.[0].id // empty' <<<"$page") || return 1
+    if [[ -n $first && $first == "$prev" ]]; then
+      rig_fail "$path ignores its offset: the same page came back twice"
+      return 1
+    fi
+    jq -c '.[]' <<<"$page" || return 1
+    prev=$first
+    offset=$((offset + count))
+    if ((offset >= 10000)); then
+      rig_fail "$path has more than 10000 rows; the lookup stops rather than read part of it"
+      return 1
+    fi
+  done
+}
+
 rig_seed_issue() {
   # rig_seed_issue <company-id> <title> <json-fields> — the issue id, created once.
-  local company=$1 title=$2 fields=$3 id
-  id=$(rig_pc_api GET "/api/companies/$company/issues?limit=100" |
-    jq -r --arg t "$title" '[.[] | select(.title == $t)][0].id // empty') || return 1
+  local company=$1 title=$2 fields=$3 id rows
+  rows=$(rig_pc_list "/api/companies/$company/issues") || return 1
+  id=$(jq -rs --arg t "$title" '[.[] | select(.title == $t)][0].id // empty' <<<"$rows") || return 1
   if [[ -z $id ]]; then
     id=$(rig_pc_api POST "/api/companies/$company/issues" \
       "$(jq -nc --arg t "$title" --argjson f "$fields" '{title: $t} + $f')" | jq -r '.id') || return 1
@@ -293,24 +318,45 @@ rig_seed_issue() {
   printf '%s\n' "$id"
 }
 
+RIG_PC_RUNS_MAX=1000
+
+rig_pc_runs() {
+  # rig_pc_runs <company-id> [agent-id] — the company's runs (or one agent's),
+  # one JSON object per line. The heartbeat-runs route reads agentId and a
+  # limit of at most 1000, and no offset, so rig_pc_list cannot page it: this
+  # is one call at the largest limit. A full page may have left rows out, so
+  # it is refused rather than read as every run.
+  local path="/api/companies/$1/heartbeat-runs?limit=$RIG_PC_RUNS_MAX" page count
+  [[ -n ${2:-} ]] && path+="&agentId=$2"
+  page=$(rig_pc_api GET "$path") || return 1
+  count=$(jq 'length' <<<"$page") || return 1
+  if ((count >= RIG_PC_RUNS_MAX)); then
+    rig_fail "/api/companies/$1/heartbeat-runs has $RIG_PC_RUNS_MAX runs or more; the lookup stops rather than read part of them"
+    return 1
+  fi
+  jq -c '.[]' <<<"$page"
+}
+
 rig_pc_live_runs() {
-  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
-    jq -r '[.[] | select(.status == "running")] | length'
+  local rows
+  rows=$(rig_pc_runs "$1") || return 1
+  jq -rs '[.[] | select(.status == "running")] | length' <<<"$rows"
 }
 
 rig_pc_agent_live_runs() {
   # Queued or running runs of one agent.
-  rig_pc_api GET "/api/companies/$1/heartbeat-runs?limit=40" |
-    jq -r --arg a "$2" '[.[] | select(.agentId == $a and (.status == "running" or .status == "queued"))] | length'
+  local rows
+  rows=$(rig_pc_runs "$1" "$2") || return 1
+  jq -rs '[.[] | select(.status == "running" or .status == "queued")] | length' <<<"$rows"
 }
 
 rig_pc_retire_tasks() {
   # Cancels the open tasks with this title. After an instance restart Paperclip
   # will not run the same task again (a wakeup is skipped as
   # execution_reconciliation_required), so a stale worker task has to be replaced.
-  local company=$1 title=$2 ids id
-  ids=$(rig_pc_api GET "/api/companies/$company/issues?limit=100" |
-    jq -r --arg t "$title" '.[] | select(.title == $t and .status != "done" and .status != "cancelled") | .id') || return 1
+  local company=$1 title=$2 ids id rows
+  rows=$(rig_pc_list "/api/companies/$company/issues") || return 1
+  ids=$(jq -rs --arg t "$title" '.[] | select(.title == $t and .status != "done" and .status != "cancelled") | .id' <<<"$rows") || return 1
   for id in $ids; do
     rig_pc_api PATCH "/api/issues/$id" '{"status": "cancelled"}' >/dev/null || return 1
   done
@@ -401,10 +447,10 @@ rig_pc_seed() {
 
   rig_pc_seed_workers "$company"
 
-  local deadline=$((SECONDS + 120)) run=""
+  local deadline=$((SECONDS + 120)) run="" rows
   while ((SECONDS < deadline)); do
-    run=$(rig_pc_api GET "/api/companies/$company/heartbeat-runs?limit=40" |
-      jq -r --arg a "$agent" '[.[] | select(.agentId == $a and (.status == "failed" or .status == "timed_out"))][0].id // empty')
+    rows=$(rig_pc_runs "$company" "$agent") || rig_die "seed: could not read the failing agent's runs"
+    run=$(jq -rs '[.[] | select(.status == "failed" or .status == "timed_out")][0].id // empty' <<<"$rows")
     [[ -n $run ]] && break
     sleep 2
   done

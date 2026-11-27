@@ -208,10 +208,10 @@ rig <verb>`.
 ```sh
 dev/rig ci                     # up, run every check, tear down, verify. One command.
 
-dev/rig up                     # bring the rig up, hidden, and leave it running
+dev/rig up                     # bring the rig up and leave it running
 dev/rig check                  # run the checks against the running rig
 dev/rig install                # add and enable the plugin on the bar (for a panel by hand)
-dev/rig screenshot shot.png    # capture the nested shell (works hidden)
+dev/rig screenshot shot.png    # capture the nested shell
 dev/rig seed                   # inbox rows of each kind, and two live worker runs
 dev/rig restart-shell          # restart only the nested shell; needed after a .js change
 dev/rig exec -- omarchy plugin list    # run any command inside the sandbox
@@ -221,7 +221,7 @@ dev/rig down                   # tear it down and prove nothing is left
 
 dev/rig ps                     # every rig: owner, age, time left
 dev/rig reap                   # end every rig whose owner is gone or whose TTL is up
-dev/rig selftest               # test the lease, keeper, ps and reap; needs no compositor
+dev/rig selftest               # test the lease, keeper, ps, reap and the seed's lookups; needs no compositor
 ```
 
 `ci` writes its evidence (one log per check, plus `nested-shell.png`) to
@@ -251,8 +251,8 @@ workspaces, never move or retile your windows and never take focus. The rig's
 Hyprland runs as the only client of a private, headless `labwc`
 (`WLR_BACKENDS=headless`, one 1280x720 output, no input devices, private
 `XDG_RUNTIME_DIR`), so there is no output of yours for it to appear on. The
-hidden view is always 1280x720. `grim` and the shell's IPC talk to the rig's own sockets, so screenshots and
-driving the shell work the same hidden. Every `up`, `down` and `check` snapshots
+rig's output is always 1280x720. `grim` and the shell's IPC talk to the rig's own sockets, so screenshots and
+driving the shell work the same way. Every `up`, `down` and `check` snapshots
 your session (`hyprctl clients`, `workspaces`, `activeworkspace`, `activewindow`,
 read-only) before and after and prints whether anything changed.
 
@@ -292,7 +292,7 @@ leak:
 Every process a rig starts has `OPR_RIG_ID=<rig id>` in its environment, so
 teardown finds daemons too (the embedded Postgres, a server that outlived its
 parent) by what they are, not by name. `dev/rig ps` shows each rig with owner,
-view, age and time left, and flags leaked processes; `--json` is for scripts.
+age and time left, and flags leaked processes; `--json` is for scripts.
 
 Two rigs at once share nothing: separate session and runtime directories,
 sockets, process tags and ports (reserved under a lock, each rig excluding the
@@ -316,7 +316,7 @@ registry, the host runtime dir or anything inside it, the host plugin
 directory, a forbidden port, a `WAYLAND_DISPLAY` socket that is not in the rig's
 runtime dir, or an Omarchy shell that is not the one the rig started. Every run
 also checks that the host config, host shell, host Paperclip data and the
-visible state of your session are untouched.
+state of your session are untouched.
 
 ### What it checks
 
@@ -345,9 +345,8 @@ of attempts is recorded in the check's log. Any other failure fails at once.
   `dev/rig check` asserts both stay disabled (`RIG_SHELL_DISABLED_PLUGINS` in
   `dev/rig.d/lib.sh`).
 - **`dev/rig screenshot` does not need a window.** It captures the rig's own
-  output while hidden. In the visible view `grim` only gets a frame while the
-  window is on a workspace you are showing; otherwise it stops after 15 seconds
-  (`RIG_GRIM_TIMEOUT`) and says so. The rig never switches your workspaces.
+  output. If `grim` gets no frame, it stops after 15 seconds (`RIG_GRIM_TIMEOUT`)
+  and says so. The rig never switches your workspaces.
 - **`dev/rig seed` fills the inbox.** It adds a company "Rig Co" to the
   throwaway instance with a failing agent and tasks, so the attention feed has
   one row each of `failed_run`, `review`, `issue_thread_interaction` and
@@ -402,7 +401,7 @@ whatever it started; so does `ci`.
 
 ### CI
 
-`dev/rig ci` runs hidden, so it works on a headless runner as well as under a
+`dev/rig ci` runs the rig hidden, so it works on a headless runner as well as under a
 desktop session. A CI runner needs `labwc` and `wtype` in its image; the sandbox has them. `ci` owns its rig: if the job is killed, the keeper ends the rig
 within seconds, and the TTL (30 minutes) is the backstop.
 

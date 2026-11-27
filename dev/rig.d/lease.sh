@@ -360,14 +360,13 @@ cmd_ps() {
     shift
   done
 
-  local dir id plugin view owner_pid owner_name created ttl state age left owner_desc keeper
+  local dir id plugin owner_pid owner_name created ttl state age left owner_desc keeper
   local now rows=() found=0 json_rows=()
   now=$(date +%s)
   for dir in $(rig_session_dirs); do
     found=1
     id=${dir##*/}
     plugin=$(rig_state_read "$dir/rig.state" plugin_id 2>/dev/null) || plugin=${id%%.*}
-    view=$(rig_state_read "$dir/rig.state" view 2>/dev/null) || view="?"
     owner_pid=$(rig_state_read "$dir/rig.state" owner_pid 2>/dev/null) || owner_pid=""
     owner_name=$(rig_state_read "$dir/rig.state" owner_name 2>/dev/null) || owner_name=""
     created=$(rig_state_read "$dir/rig.state" created 2>/dev/null) || created=$now
@@ -379,12 +378,12 @@ cmd_ps() {
     keeper=$(<"$dir/keeper.pid") 2>/dev/null || keeper=""
     if [[ $state == live && -n $keeper && ! -d /proc/$keeper ]]; then state="live (keeper gone)"; fi
     if ((json)); then
-      json_rows+=("$(jq -nc --arg id "$id" --arg plugin "$plugin" --arg view "$view" --arg owner "$owner_pid" \
+      json_rows+=("$(jq -nc --arg id "$id" --arg plugin "$plugin" --arg owner "$owner_pid" \
         --arg state "$state" --argjson age "$age" --argjson ttl "${ttl:-0}" \
-        '{id:$id,plugin:$plugin,view:$view,owner_pid:$owner,state:$state,age_seconds:$age,ttl_seconds:$ttl}')")
+        '{id:$id,plugin:$plugin,owner_pid:$owner,state:$state,age_seconds:$age,ttl_seconds:$ttl}')")
     else
-      rows+=("$(printf '%-34s %-12s %-8s %-18s %-8s %-8s %s' \
-        "$id" "$plugin" "$view" "$owner_desc" "$(rig_fmt_duration "$age")" "$left" "$state")")
+      rows+=("$(printf '%-34s %-12s %-18s %-8s %-8s %s' \
+        "$id" "$plugin" "$owner_desc" "$(rig_fmt_duration "$age")" "$left" "$state")")
     fi
   done
 
@@ -402,7 +401,7 @@ cmd_ps() {
   fi
 
   if ((found)); then
-    printf '%-34s %-12s %-8s %-18s %-8s %-8s %s\n' RIG PLUGIN VIEW OWNER AGE TTL-LEFT STATE
+    printf '%-34s %-12s %-18s %-8s %-8s %s\n' RIG PLUGIN OWNER AGE TTL-LEFT STATE
     printf '%s\n' "${rows[@]}"
   else
     echo "no rigs"
