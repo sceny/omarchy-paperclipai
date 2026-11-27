@@ -219,7 +219,7 @@ dev/rig down                   # tear it down and prove nothing is left
 
 dev/rig ps                     # every rig: owner, age, time left
 dev/rig reap                   # end every rig whose owner is gone or whose TTL is up
-dev/rig selftest               # test the lease, keeper, ps and reap; needs no compositor
+dev/rig selftest               # test the lease, keeper, ps, reap and the seed's lookups; needs no compositor
 ```
 
 `ci` writes its evidence (one log per check, plus `nested-shell.png`) to

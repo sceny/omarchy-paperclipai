@@ -1,7 +1,7 @@
 #!/bin/bash
-# Self-test of the rig's lease, keeper, ps and reap. Sourced by dev/rig
-# (`dev/rig selftest`). Needs no compositor, no Paperclip and no desktop, so it
-# runs anywhere, CI included.
+# Self-test of the rig's lease, keeper, ps and reap, and of the seed's lookups.
+# Sourced by dev/rig (`dev/rig selftest`). Needs no compositor, no Paperclip
+# and no desktop, so it runs anywhere, CI included.
 #
 # It builds stand-in rigs: a session dir, a state file, a lease, a keeper and a
 # few tagged `sleep` processes, one of them detached into its own session the
@@ -175,6 +175,58 @@ st_instance_cases() {
   st_check "the timing file says the instance is gone" st_kept_has "$scratch" 'stop: the instance is gone'
 }
 
+st_fake_api() {
+  # Stands in for rig_pc_api GET the way the server answers: the issues route
+  # honours limit and offset; the heartbeat-runs route reads agentId and a
+  # limit of 1..1000 and ignores offset. ST_ISSUES and ST_RUNS are row counts;
+  # runs alternate between agents a and b.
+  local path=${2%%\?*} query=${2#*\?} limit=200 offset=0 agent="" kv
+  for kv in ${query//&/ }; do
+    case $kv in
+    limit=*) limit=${kv#*=} ;;
+    offset=*) offset=${kv#*=} ;;
+    agentId=*) agent=${kv#*=} ;;
+    esac
+  done
+  case $path in
+  */issues)
+    jq -nc --argjson n "$ST_ISSUES" --argjson o "$offset" --argjson l "$limit" \
+      '[range($o; [$n, $o + $l] | min) | {id: "i\(.)"}]' ;;
+  */heartbeat-runs)
+    ((limit > 1000)) && limit=1000
+    jq -nc --argjson n "$ST_RUNS" --argjson l "$limit" --arg a "$agent" \
+      '[range(0; $n) | {id: "r\(.)", agentId: (if . % 2 == 0 then "a" else "b" end), status: "running"}
+        | select($a == "" or .agentId == $a)][:$l]' ;;
+  *) return 1 ;;
+  esac
+}
+st_lookup() {
+  # st_lookup <issues> <runs> <command...> — the command against the stand-in API.
+  (
+    ST_ISSUES=$1 ST_RUNS=$2
+    shift 2
+    rig_pc_api() { st_fake_api "$@"; }
+    "$@"
+  )
+}
+st_lookup_is() {
+  # st_lookup_is <want> <issues> <runs> <command...> — the command prints <want>.
+  local want=$1 got
+  shift
+  got=$(st_lookup "$@") || return 1
+  [[ $got == "$want" ]]
+}
+st_count() { "$@" | wc -l; }
+st_lookup_cases() {
+  rig_say "The seed's lookups read every row the routes give"
+  st_check "issues are read across pages (250 rows)" st_lookup_is 250 250 0 st_count rig_pc_list /api/companies/c/issues
+  st_check "the company's runs are read though the route ignores offset" st_lookup_is 7 0 7 st_count rig_pc_runs c
+  st_check "one agent's runs are asked of the route by agentId" st_lookup_is 3 0 7 st_count rig_pc_runs c b
+  st_check "live runs counts the company's running runs" st_lookup_is 150 0 150 rig_pc_live_runs c
+  st_check "an agent's live runs counts only that agent's" st_lookup_is 75 0 150 rig_pc_agent_live_runs c a
+  st_check "a full page of runs is refused, not read as every run" st_expr '! st_lookup 0 1200 rig_pc_runs c'
+}
+
 cmd_selftest() {
   local scratch
   scratch=$(mktemp -d "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-selftest.XXXXXX")
@@ -267,6 +319,7 @@ cmd_selftest() {
   st_check "verify-clean passes with no rigs" cmd_verify_clean
 
   st_instance_cases "$scratch"
+  ((RIG_NEEDS_PAPERCLIP)) && st_lookup_cases
 
   # The stand-in owners and anything else this test started.
   kill "$owner_a" "$owner_b" 2>/dev/null || true

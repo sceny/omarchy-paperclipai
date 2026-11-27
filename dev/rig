@@ -20,7 +20,7 @@
 #   dev/rig exec -- <command...>         run a command inside the rig sandbox
 #   dev/rig verify-clean                 prove no rig has left anything behind
 #   dev/rig probe -- <command...>        one-off probe in a private runtime dir, cores off
-#   dev/rig selftest                     test the lease, keeper, ps and reap (no compositor needed)
+#   dev/rig selftest                     test the lease, keeper, ps, reap and seed lookups (no compositor)
 #   dev/rig --rig <id> <command>         act on one named rig (a part of the id is enough)
 #
 # What it guarantees, and why it exists:

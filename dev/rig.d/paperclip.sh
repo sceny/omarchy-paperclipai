@@ -318,17 +318,36 @@ rig_seed_issue() {
   printf '%s\n' "$id"
 }
 
+RIG_PC_RUNS_MAX=1000
+
+rig_pc_runs() {
+  # rig_pc_runs <company-id> [agent-id] — the company's runs (or one agent's),
+  # one JSON object per line. The heartbeat-runs route reads agentId and a
+  # limit of at most 1000, and no offset, so rig_pc_list cannot page it: this
+  # is one call at the largest limit. A full page may have left rows out, so
+  # it is refused rather than read as every run.
+  local path="/api/companies/$1/heartbeat-runs?limit=$RIG_PC_RUNS_MAX" page count
+  [[ -n ${2:-} ]] && path+="&agentId=$2"
+  page=$(rig_pc_api GET "$path") || return 1
+  count=$(jq 'length' <<<"$page") || return 1
+  if ((count >= RIG_PC_RUNS_MAX)); then
+    rig_fail "/api/companies/$1/heartbeat-runs has $RIG_PC_RUNS_MAX runs or more; the lookup stops rather than read part of them"
+    return 1
+  fi
+  jq -c '.[]' <<<"$page"
+}
+
 rig_pc_live_runs() {
   local rows
-  rows=$(rig_pc_list "/api/companies/$1/heartbeat-runs") || return 1
+  rows=$(rig_pc_runs "$1") || return 1
   jq -rs '[.[] | select(.status == "running")] | length' <<<"$rows"
 }
 
 rig_pc_agent_live_runs() {
   # Queued or running runs of one agent.
   local rows
-  rows=$(rig_pc_list "/api/companies/$1/heartbeat-runs") || return 1
-  jq -rs --arg a "$2" '[.[] | select(.agentId == $a and (.status == "running" or .status == "queued"))] | length' <<<"$rows"
+  rows=$(rig_pc_runs "$1" "$2") || return 1
+  jq -rs '[.[] | select(.status == "running" or .status == "queued")] | length' <<<"$rows"
 }
 
 rig_pc_retire_tasks() {
@@ -430,8 +449,8 @@ rig_pc_seed() {
 
   local deadline=$((SECONDS + 120)) run="" rows
   while ((SECONDS < deadline)); do
-    rows=$(rig_pc_list "/api/companies/$company/heartbeat-runs") || rig_die "seed: could not read the company's runs"
-    run=$(jq -rs --arg a "$agent" '[.[] | select(.agentId == $a and (.status == "failed" or .status == "timed_out"))][0].id // empty' <<<"$rows")
+    rows=$(rig_pc_runs "$company" "$agent") || rig_die "seed: could not read the failing agent's runs"
+    run=$(jq -rs '[.[] | select(.status == "failed" or .status == "timed_out")][0].id // empty' <<<"$rows")
     [[ -n $run ]] && break
     sleep 2
   done
