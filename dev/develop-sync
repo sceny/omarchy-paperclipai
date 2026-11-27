@@ -1,0 +1,30 @@
+#!/bin/bash
+# The commit that brings develop level with main, for the release run to push.
+#
+#   dev/develop-sync MAIN_SHA X.Y.Z     prints the commit to push to develop
+#
+# Reads origin/develop (fetch it first). develop an ancestor of MAIN_SHA: that
+# is MAIN_SHA, a fast-forward. MAIN_SHA already in develop: develop's head,
+# nothing to merge. Otherwise (a release head, an urgent fix on main): a merge
+# commit of MAIN_SHA into develop, develop first, made without touching the
+# working tree. A conflict fails, and nothing is printed: develop is never
+# left behind with only a warning.
+set -euo pipefail
+
+fail() { echo "develop-sync: $*" >&2; exit 1; }
+
+[ $# -eq 2 ] || fail "usage: dev/develop-sync MAIN_SHA X.Y.Z"
+main=$(git rev-parse --verify --quiet "$1^{commit}") || fail "$1 is not a commit"
+version=$2
+develop=$(git rev-parse --verify --quiet "refs/remotes/origin/develop^{commit}") ||
+  fail "no origin/develop: git fetch origin develop first"
+
+if git merge-base --is-ancestor "$develop" "$main"; then
+  echo "$main"
+elif git merge-base --is-ancestor "$main" "$develop"; then
+  echo "$develop"
+else
+  tree=$(git merge-tree --write-tree "$develop" "$main") ||
+    fail "main ($main) does not merge into develop ($develop) cleanly: merge it by hand"$'\n'"$tree"
+  git commit-tree "$tree" -p "$develop" -p "$main" -m "Release $version: develop brought level with main"
+fi

@@ -373,6 +373,7 @@ in order; the detail, the checklist and the record templates are in
 | `dev/loaded-code` | exit 0 when the running shell has the plugin's IPC functions; 1 means restart the shell |
 | `dev/sync-skills` | refresh `skills/` from an upstream checkout |
 | `dev/release-prepare` | make the release branch: version and CHANGELOG section |
+| `dev/develop-sync` | the `release` workflow's commit that brings `develop` level with `main` |
 | `dev/release-notes` | the `release` workflow's reading of the version and its CHANGELOG section |
 | `dev/marketplace-check.mjs` | the marketplace's own checks on one commit |
 | `CHANGELOG.md` | what's new, each version's notes |
