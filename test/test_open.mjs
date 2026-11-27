@@ -18,14 +18,15 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const script = path.join(root, "bin", "omarchy-paperclip-open")
 const BASE = "http://127.0.0.1:3199"
 
-function run(args, { windowOpen, clients, env = { PAPERCLIP_OMARCHY_API_BASE: BASE }, info }) {
+function run(args, { windowOpen, clients, env = { PAPERCLIP_OMARCHY_API_BASE: BASE }, info, umask = 0o022 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-open-"))
   const log = path.join(dir, "calls.log")
+  const umaskLog = path.join(dir, "umask.log")
   const stub = (name, body) => {
     const file = path.join(dir, name)
     fs.writeFileSync(file, "#!/bin/bash\n" + body + "\n", { mode: 0o755 })
   }
-  stub("omarchy-launch-webapp", `echo "launch $*" >> "${log}"`)
+  stub("omarchy-launch-webapp", `echo "launch $*" >> "${log}"; umask > "${umaskLog}"`)
   stub("hyprctl", [
     `if [[ $1 == clients ]]; then`,
     clients
@@ -40,17 +41,24 @@ function run(args, { windowOpen, clients, env = { PAPERCLIP_OMARCHY_API_BASE: BA
     fs.mkdirSync(instanceDir, { recursive: true })
     fs.writeFileSync(path.join(instanceDir, "runtime-info.json"), JSON.stringify(info))
   }
-  const result = spawnSync("bash", [script, ...args], {
-    env: {
-      PATH: dir + ":" + process.env.PATH,
-      HOME: dir,
-      ...env,
-    },
-    encoding: "utf8",
-  })
+  const saved = process.umask(umask)
+  let result
+  try {
+    result = spawnSync("bash", [script, ...args], {
+      env: {
+        PATH: dir + ":" + process.env.PATH,
+        HOME: dir,
+        ...env,
+      },
+      encoding: "utf8",
+    })
+  } finally {
+    process.umask(saved)
+  }
   const calls = fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim().split("\n") : []
+  const launcherUmask = fs.existsSync(umaskLog) ? fs.readFileSync(umaskLog, "utf8").trim() : null
   fs.rmSync(dir, { recursive: true, force: true })
-  return { status: result.status, calls }
+  return { status: result.status, calls, launcherUmask }
 }
 
 const issue = BASE + "/SCE/issues/SCE-444"
@@ -97,6 +105,21 @@ for (const bad of [
   r = run([bad], { windowOpen: true })
   assert.notEqual(r.status, 0, "refused: " + bad)
   assert.deepEqual(r.calls, [], "nothing is launched or raised for " + bad)
+}
+
+// A control character after the origin is refused, wherever it sits.
+for (const bad of [
+  BASE + "/a\nb",
+  BASE + "/a\rb",
+  BASE + "/a\tb",
+  BASE + "?q=\u0001",
+  BASE + "#\u001b[31m",
+  BASE + "/x\u007f",
+  BASE + "\n",
+]) {
+  r = run([bad], { windowOpen: false })
+  assert.notEqual(r.status, 0, "refused: " + JSON.stringify(bad))
+  assert.deepEqual(r.calls, [], "nothing is launched or raised for " + JSON.stringify(bad))
 }
 
 r = run(["--new-window", "https://evil.example/"], { windowOpen: false })
@@ -151,5 +174,19 @@ assert.match(r.calls[0], /^focus .*0x222/, "the host and name window is chosen a
 
 r = run([], { clients: [stranger, hostOnly] })
 assert.match(r.calls[0], /^focus .*0x111/, "a host window without the name is still the board's window")
+
+// The browser is the user's program: it starts with the session's umask, not
+// the 077 the plugin keeps for its own files.
+for (const [umask, expected] of [[0o022, "0022"], [0o002, "0002"], [0o077, "0077"]]) {
+  r = run([issue], { windowOpen: false, umask })
+  assert.deepEqual(r.calls, ["launch " + issue])
+  assert.equal(r.launcherUmask, expected, "the launcher sees the session's umask " + expected)
+}
+// A script that sourced the helpers first passes the session's umask down; a
+// value that is not a umask is not taken.
+r = run([issue], { windowOpen: false, umask: 0o077, env: { PAPERCLIP_OMARCHY_API_BASE: BASE, PAPERCLIP_SESSION_UMASK: "0022" } })
+assert.equal(r.launcherUmask, "0022", "the umask recorded by the first script in a chain wins")
+r = run([issue], { windowOpen: false, umask: 0o022, env: { PAPERCLIP_OMARCHY_API_BASE: BASE, PAPERCLIP_SESSION_UMASK: "0022; x" } })
+assert.equal(r.launcherUmask, "0022", "a recorded value that is not a umask is replaced by the real one")
 
 console.log("open: ok")

@@ -7,8 +7,19 @@
 # shellcheck shell=bash
 
 # Everything these scripts create is private to the user: the state directory
-# holds a token, session bundles and snooze state.
+# holds a token, session bundles and snooze state. A program started for the
+# user (the browser) gets the umask the session gave us back, through
+# pc_session_umask; the first script in a chain records it for the rest.
+if [[ ! ${PAPERCLIP_SESSION_UMASK:-} =~ ^0?[0-7]{3}$ ]]; then
+  PAPERCLIP_SESSION_UMASK=$(umask)
+fi
+export PAPERCLIP_SESSION_UMASK
 umask 077
+
+pc_session_umask() {
+  # Restore the session's umask, just before exec'ing a program of the user's.
+  umask "$PAPERCLIP_SESSION_UMASK"
+}
 
 PAPERCLIP_PLUGIN_DIR=${PAPERCLIP_PLUGIN_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}
 PAPERCLIP_PLUGIN_ID=${PAPERCLIP_PLUGIN_ID:-sceny.paperclipai}

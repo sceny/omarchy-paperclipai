@@ -3,12 +3,13 @@
 #
 # Usage:
 #   omarchy-paperclip-service start|stop|restart|install|status [--quiet]
-#   omarchy-paperclip-service autostart|mark-stopped --session ID [--quiet]
+#   omarchy-paperclip-service autostart|mark-stopped|mark-running --session ID [--quiet]
 #
 # Every copy of the plugin (the bar builds one per screen) and every stop path
 # share one state in the plugin's state directory:
 #   stopped-by-user     written by `stop` and `mark-stopped`, removed by `start`,
-#                       `restart` and `install`; holds the shell session it
+#                       `restart`, `install` and `mark-running` (the instance
+#                       answers again, however it was started); holds the shell session it
 #                       belongs to, and `autostart` honours it only for that
 #                       session (a shell restart is a new session)
 #   auto-start-attempt  "<session> <epoch>": one automatic start per ten
@@ -156,6 +157,14 @@ autostart)
   ;;
 mark-stopped)
   write_stop_marker || exit 1
+  ;;
+mark-running)
+  # The plugin saw the instance answer again. A start from a terminal
+  # (`systemctl --user start`) passes no script of ours, so the stop it ends
+  # is ended here; otherwise a later crash would not be restarted. Only an
+  # answer now counts: the report that asked may be a poll old.
+  pc_health_ok && clear_stop_marker
+  exit 0
   ;;
 stop)
   if service_installed; then

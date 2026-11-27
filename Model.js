@@ -525,6 +525,9 @@ function primaryAction(report, pending) {
   if (state === "probe-failed") {
     return { id: "doctor", label: "Fix it with your agent", detail: "The status probe itself failed" }
   }
+  // The address is not Paperclip's: nothing that opens or creates something
+  // there is offered. The problem line is the only thing to read.
+  if (state === "untrusted-listener") return null
   if (!report.webapp || !report.webapp.installed) {
     return { id: "webapp", label: "Create the web app", detail: "Add Paperclip to the app launcher" }
   }
@@ -617,11 +620,17 @@ function settlePending(pending, report) {
 //                   record that, do not start it.
 //   "start":        ask the service script to start it; the script is the one
 //                   that checks the marker, the lock and the ten-minute rule.
+//   "mark-running": it answers and did not before (a start from a terminal,
+//                   or the first look), so any recorded stop is over; a later
+//                   crash is then started again.
 // A unit that is starting, stopping or running without answering is in
 // transition and gets neither. A failed unit is a crash, not a stop.
 function autoStartStep(wasUp, report, autoStart, busy) {
   var up = !!report && report.reachable === true
   var keep = wasUp === true || up
+  if (up && wasUp !== true && busy !== true && (report.service || {}).installed === true) {
+    return { action: "mark-running", wasUp: true }
+  }
   if (!report || busy === true || String(report.state) !== "stopped") return { action: "", wasUp: keep }
   var service = report.service || {}
   if (service.installed !== true) return { action: "", wasUp: keep }
