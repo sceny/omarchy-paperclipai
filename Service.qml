@@ -86,6 +86,7 @@ Item {
   property double _lastAutoStartAsk: 0
 
   property var _seenKeys: ({})
+  property double _backlogSince: 0
   property var _previousReport: null
   // A refresh asked for while the probe runs with other arguments: the panel
   // opened during a closed bar's read. One more read follows that one.
@@ -155,8 +156,9 @@ Item {
     }
     lastError = ""
     clock = Date.now()
-    var diff = Model.diffNotifications(_previousReport, parsed, notifyLevel, _seenKeys)
+    var diff = Model.diffNotifications(_previousReport, parsed, notifyLevel, _seenKeys, _backlogSince)
     _seenKeys = diff.seen
+    _backlogSince = diff.since
     // A snoozed plugin still marks what it saw as seen, so waking it up is
     // never a replay of everything that happened in the meantime.
     if (quiet.toasts) {

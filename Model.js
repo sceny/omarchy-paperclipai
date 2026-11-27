@@ -202,6 +202,7 @@ function asRows(value) {
       actionId: String(row.actionId || ""),
       snoozedUntil: String(row.snoozedUntil || ""),
       hidden: row.hidden === true,
+      activityMs: asMillis(row.activityMs),
       // A single row is a group of one, so the panel has one row shape only.
       count: 1,
       members: null
@@ -836,9 +837,16 @@ function severityUrgency(severity) {
 //
 // `seen` is the set of row keys already announced, so a restart of the shell
 // does not replay a backlog: the caller seeds it from the first report and
-// passes it back on every call. Returns { notifications: [...], seen: {...} }.
-function diffNotifications(previous, next, level, seen) {
-  var out = { notifications: [], seen: seen || {} }
+// passes it back on every call.
+//
+// `since` covers the rows the first report did not list: the bar's short list
+// holds twenty, and the rest of a longer inbox first shows when the panel
+// opens. Until a report lists the whole inbox, a row nobody saw that last moved
+// before the session began was waiting all along, and is marked seen without a
+// toast. The caller passes back what the last call returned.
+// Returns { notifications: [...], seen: {...}, since: ms }.
+function diffNotifications(previous, next, level, seen, since) {
+  var out = { notifications: [], seen: seen || {}, since: asMillis(since) }
   if (!next) return out
   var mode = normalizeNotifyLevel(level)
   // Off says nothing and still marks what it saw as seen, as a snoozed plugin
@@ -895,7 +903,7 @@ function diffNotifications(previous, next, level, seen) {
   // row that comes back is one toast. A snoozed row is never in the report.
   for (var i = 0; i < next.needs.length; i++) {
     var row = next.needs[i]
-    if (row.hidden === true || out.seen[row.key]) continue
+    if (row.hidden === true || out.seen[row.key] || waitedSince(row, out.since)) continue
     if (!all) {
       if (isDecisionKind(row.kind)) freshDecisions.push(row)
     } else if (isErrorKind(row.kind) || row.isError === true) freshErrors.push(row)
@@ -977,7 +985,20 @@ function markSeen(out, next, prune) {
   out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
   out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
   out.seen = forgetHidden(prune ? pruneKeys(out.seen, next) : out.seen, next)
+  // The first report starts the cover for the rows it did not list. Once one
+  // report has listed every row, every row waiting at the start has been seen,
+  // and anything after that is news however old its time.
+  if (listsEveryRow(next, next.needs, next.inboxTotal, next.inboxStale)) out.since = 0
+  else if (!prune) out.since = asMillis(Date.parse(String(next.generatedAt || "")))
   return out
+}
+
+// A row is news only when its time says it moved after the session began; one
+// with no time cannot show that, so it is counted as waiting. A row whose
+// Paperclip snooze began before the start and ends while the cover holds keeps
+// its old time, so it stays quiet too, as a cut list already left it.
+function waitedSince(row, since) {
+  return since > 0 && !(row.activityMs > since)
 }
 
 // Whether a report's list holds every row there is, so a key missing from it

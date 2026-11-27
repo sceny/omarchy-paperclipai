@@ -639,7 +639,15 @@ class LargeAnswer(unittest.TestCase):
         self.assertEqual(len(report["needs"]), 4 * 3)
         self.assertEqual(len(report["moving"]), 4)
         self.assertEqual(len(report["needs"][0]["title"]), 120)
+        self.assertEqual(report["needs"][0]["activityMs"], 0)
         self.check(redacted)
+
+    def test_a_row_time_is_a_number_or_zero(self):
+        for value, expected in (("2026-10-09T17:00:00Z", 1791565200000),
+                                ("2026-10-09T17:00:00.250+00:00", 1791565200250),
+                                ("", 0), (None, 0), ("soon", 0), (12, 0),
+                                ("0001-01-01T00:00:00+00:00", 0)):
+            self.assertEqual(status.activity_ms(value), expected, repr(value))
 
 
 class RedactedCrash(unittest.TestCase):

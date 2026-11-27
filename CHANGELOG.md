@@ -30,6 +30,10 @@ GitHub release with these notes.
   arrived while *Desktop notifications* was `Off` is marked seen, as it is
   while the plugin is snoozed, so switching to `Needs-me` or `Everything`
   raises a toast only for what arrives after.
+- **Opening the panel no longer toasts rows that were already waiting**: with
+  more than 20 rows in the inbox, the first open listed the rest and raised
+  "N things need you" for them. A row the widget never listed now toasts only
+  if it moved after the shell started (#127).
 - **A row snoozed in Paperclip stays out of the plugin** until its snooze ends:
   it is not listed, counted or toasted, under either inbox filter, and Retry
   all leaves it alone. The `All` filter now adds only the rows you cleared;

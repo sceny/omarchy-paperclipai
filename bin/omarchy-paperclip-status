@@ -30,7 +30,8 @@ Contract (schemaVersion 1):
       "companies": [ { "id", "name", "prefix", "attention", "working" } ],
       "needs":  [ { "key", "title", "detail", "severity", "kind", "url",
                     "itemKey", "retryable", "retryKind", "agentId", "runId",
-                    "issueId", "actionId", "hidden", "snoozedUntil" } ],
+                    "issueId", "actionId", "hidden", "snoozedUntil",
+                    "activityMs" } ],
       "moving": [ { "key", "title", "detail", "url" } ],
       "problems": [ "..." ]
     }
@@ -553,6 +554,14 @@ def epoch(iso) -> float:
     return parsed.timestamp()
 
 
+def activity_ms(iso) -> int:
+    """Milliseconds since the epoch, or 0 for anything that is not a time."""
+    try:
+        return max(0, int(epoch(iso) * 1000))
+    except (OverflowError, OSError, ValueError):
+        return 0
+
+
 def hidden_state(raw: dict, now: float):
     """(snoozedUntil, cleared): a snooze or a clear that is still in force.
 
@@ -617,6 +626,9 @@ def inbox_row(api: Api, company: dict, raw: dict, now: float) -> dict:
         "company": short(company.get("name"), NAME_LIMIT),
         "companyId": whole(company.get("id")),
         "ago": age(raw.get("activityAt") or raw.get("updatedAt") or "", now),
+        # The same time as a number, 0 when there is none: a row the widget
+        # never listed is news only if it moved after its session began.
+        "activityMs": activity_ms(raw.get("activityAt") or raw.get("updatedAt")),
         "url": link(api, href),
         "itemKey": whole(raw.get("dismissalKey"), 2 * ID_LIMIT),
         "retryKind": retry_kind,
