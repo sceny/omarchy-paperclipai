@@ -43,6 +43,10 @@ GitHub release with these notes.
 - **No *Create the web app* at an address that is not your Paperclip**: when
   another program holds Paperclip's address, the panel shows the problem and
   offers nothing that opens or creates something there.
+- **The browser starts with your session's umask**: a page or task opened
+  from the panel started the browser with the plugin's own `077`, so its
+  downloads and profile files were readable by you alone. The plugin's own
+  files stay private.
 
 ## 0.3.0 — 2026-11-05
 
