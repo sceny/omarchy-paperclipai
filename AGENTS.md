@@ -100,18 +100,22 @@ A review is posted with `gh pr review <n> --comment --body …`, never `gh pr
 comment`. Until `main` carries `public-text.yml`, only a review starts
 `public-text` on the pull request's head; a plain comment does not.
 
-`develop` merges through a merge queue, so `gh pr merge` is refused. Merge by
-adding the pull request to the queue:
+`develop` merges through a merge queue, so `gh pr merge` is refused. After the
+review, wait until `gh pr checks <n> --required` shows the `public-text` run
+the review started as finished (seconds): the queue refuses a pull request
+while a required check is in progress. If that run failed, edit the review and
+wait for the next run. Then merge by adding the pull request to the queue:
 
 ```sh
 gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{state}}}' \
   -f id="$(gh pr view <n> --json id --jq .id)"
 ```
 
-The queue runs `public-text` again when the merge is asked for, and that run
-reads every comment and review posted until then. A pull request whose text
-fails leaves the queue unmerged. There is no need to wait for the run a review
-started before you add the pull request to the queue.
+An `UNPROCESSABLE` answer that names a check `in progress` means the run is not
+finished: add it again when it is. The queue runs `public-text` again when the
+merge is asked for, and that run reads every comment and review posted until
+then. A pull request whose text fails leaves the queue unmerged: fix the text
+and add it again.
 
 A pull request goes into the queue only on a review that counts: by someone
 other than its author, submitted before the merge, on the head that merges
