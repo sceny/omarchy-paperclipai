@@ -420,8 +420,16 @@ cmd_ci() {
   [[ -n ${RIG_OWNER_PID:-} ]] || RIG_OWNER_PID=$$
   [[ " ${up_args[*]} " == *" --ttl "* ]] || up_args+=(--ttl "$RIG_CI_TTL")
 
+  # `ci` acts on the rig it brings up and on no other. A --rig (the sandbox
+  # names its live rig on every call) would send the check and the teardown
+  # to a rig someone else is using.
+  local named=${RIG_SELECT:-${OPR_RIG_ID:-}}
+  [[ -z $named ]] || rig_warn "ci brings up its own rig and leaves $named alone"
+  unset RIG_SELECT OPR_RIG_ID
+
   RIG_CI_EVIDENCE=$out
   cmd_up "${up_args[@]}" || return 1
+  RIG_SELECT=$RIG_ID
   local status=0
   # A subshell: rig_die exits, and an exit here would skip the teardown.
   (cmd_check) || status=$?
