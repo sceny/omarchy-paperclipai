@@ -33,8 +33,14 @@ Titles, details, names, `whyNow` and every other string from the API or from an
 agent are written by someone else. The plugin treats them as data:
 
 - **Never markup.** Wherever one is shown as text it is shown as plain text
-  (`textFormat: Text.PlainText`), and wherever a notification daemon would read
-  it as markup it is escaped first.
+  (`textFormat: Text.PlainText`). A toast body is not escaped, because
+  Omarchy's daemon decodes entities (up to three passes) before it puts back
+  the tags it allows and links bare urls, so an escape does not survive it.
+  Instead the body carries no `<` or `>` (they become `‹` and `›`), no `&`
+  that can start an entity (a word joiner follows it) and no url (a word joiner follows the colon of `scheme://`). The summary,
+  drawn as plain text, keeps its characters but has its urls broken the same
+  way, so no url in it becomes the card's link. The check feeds the body
+  through the daemon's own renderer, not through our escape.
 - **Never an option.** Passed to a command, it cannot be read as an option: a
   value with a leading `-` is neutralised, or follows `--`.
 - **Never on a command line.** Other users of the machine can read the command
@@ -90,7 +96,7 @@ that does not exist, or when a gap has no issue.
 | **The state directory and what is on disk** | `test/test_state.py` `Modes`, `Retention`, `TokenFile` | | |
 | **Opening the board** (urls, windows) | `test/test_open.mjs` | | |
 | **The clipboard** | `test/test_private_text.py` `C2NoClipboardRead` | | |
-| **The shared shell's availability** | `test/test_transport.py` `Fetch` (`test_an_oversize_body_is_an_error_and_is_not_read_to_the_end`, `test_a_slow_answer_stops_at_one_deadline_for_the_whole_request`), `LargeAnswer`; `test/test_inbox.mjs`; `test/test_security_rules.py` `NoNulBytes` | | |
+| **The shared shell's availability** | `test/test_transport.py` `Fetch` (`test_an_oversize_body_is_an_error_and_is_not_read_to_the_end`, `test_a_slow_answer_stops_at_one_deadline_for_the_whole_request`), `LargeAnswer`; `test/test_inbox.mjs`; `test/test_model.mjs` (the seen keys a session keeps stay under a fixed bound however many ids the instance makes up); `test/test_security_rules.py` `NoNulBytes` | | |
 | **Personal data and secrets in the repository** | `test/test_public_text.py` `Environment`, `WholePullRequest`, `Standing`; `test/test_tree_data.py` `NothingPrivateInTheTree`, `PlantedCases` | | |
 | **The repository and the release** (CI, supply chain) | `test/test_public_text.py` `Workflow`; `test/test_release_prepare.py` `ReleasePrepare`; `test/test_security_rules.py` `ListMatchesTests`, `AgentsFile` | manual: `npx -y paperclipai@latest` runs the product's own CLI unpinned when there is no managed install (*The Paperclip command line*) | Enforced by GitHub, not by a test: the rulesets on `main` in both repositories, the `release` environment's reviewer, and both repositories' default token settings (read only, no workflow approvals). Residual: one account for every agent, so `main` takes a merge with no second reviewer, and the `release` reviewer is that same account with self-review not prevented, so a run holding its token could approve the publish job; the approval is a deliberate act before the key is read, not a separation of identities ([#90](https://github.com/sceny/omarchy-paperclipai/issues/90)); the first release and the first fix under these rules are not yet seen run ([#91](https://github.com/sceny/omarchy-paperclipai/issues/91)); a fix branch from `main` has no checks until `main` has the workflows ([#92](https://github.com/sceny/omarchy-paperclipai/issues/92)); the other workflows' triggers, token permissions and `run:` lines are read by no test ([#44](https://github.com/sceny/omarchy-paperclipai/issues/44)); in `sceny/omarchy-devices`, the release's public-text workflow on `main` ([#551](https://github.com/sceny/omarchy-devices/issues/551)) |
 

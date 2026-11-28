@@ -260,6 +260,43 @@ st_lookup_cases() {
   st_check "a full page of runs is refused, not read as every run" st_expr '! st_lookup 0 1200 rig_pc_runs c'
 }
 
+st_tree() {
+  # st_tree <dir> <version> <extra file>: a stand-in plugin tree, a git checkout.
+  mkdir -p "$1" && (
+    cd "$1" || exit 1
+    printf '{"id":"%s","version":"%s"}\n' "$RIG_PLUGIN_ID" "$2" >manifest.json
+    printf '%s\n' "$2" >"$3"
+    git init -q -b main && git add -A &&
+      git -c user.email=t@localhost -c user.name=t commit -q -m tree
+  ) >/dev/null 2>&1
+}
+
+st_package_cases() {
+  # The upgrade path: the package repo holds the old tree, a user's clone of
+  # it is fast-forwarded the way `omarchy plugin update` does, and afterwards
+  # it is the new tree and nothing of the old one.
+  local scratch=$1
+  rig_say "An upgrade is the package's next commit"
+  st_tree "$scratch/pkg/old" 0.1.0 old-only
+  st_tree "$scratch/pkg/new" 0.2.0 new-only
+  st_check "the clone is fast-forwarded to the new tree and keeps nothing of the old" st_expr '(
+    RIG_PKG_REPO=$scratch/pkg/package.git RIG_LOGS=$scratch/pkg
+    rig_build_package_repo "$scratch/pkg/old" &&
+      git clone -q "file://$RIG_PKG_REPO" "$scratch/pkg/clone" &&
+      [[ $(jq -r .version "$scratch/pkg/clone/manifest.json") == 0.1.0 ]] &&
+      rig_commit_package_tree "$scratch/pkg/new" &&
+      git -C "$scratch/pkg/clone" fetch -q origin HEAD &&
+      git -C "$scratch/pkg/clone" merge -q --ff-only FETCH_HEAD &&
+      [[ $(git -C "$scratch/pkg/clone" rev-parse HEAD) == "$(git -C "$RIG_PKG_REPO" rev-parse HEAD)" ]] &&
+      [[ $(jq -r .version "$scratch/pkg/clone/manifest.json") == 0.2.0 ]] &&
+      [[ -f $scratch/pkg/clone/new-only && ! -e $scratch/pkg/clone/old-only ]]
+  ) >/dev/null 2>&1'
+  st_check "a package commit with no package repo refuses" st_expr '! (
+    RIG_PKG_REPO=$scratch/pkg/none.git RIG_LOGS=$scratch/pkg
+    rig_commit_package_tree "$scratch/pkg/new"
+  ) >/dev/null 2>&1'
+}
+
 cmd_selftest() {
   local scratch
   scratch=$(mktemp -d "${PAPERCLIP_SCRATCH_DIR:-${TMPDIR:-/tmp}}/rig-selftest.XXXXXX")
@@ -353,6 +390,7 @@ cmd_selftest() {
 
   st_instance_cases "$scratch"
   st_ci_cases "$scratch"
+  st_package_cases "$scratch"
   ((RIG_NEEDS_PAPERCLIP)) && st_lookup_cases
 
   # The stand-in owners and anything else this test started.

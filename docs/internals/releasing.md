@@ -197,7 +197,10 @@ at the call catches the next variant.
 1. **Values from outside never reach a command as an option or a page as markup.**
    Every value from the API or from agents (titles, details, names, `whyNow`)
    passed to a CLI is neutralised against option parsing (no leading `-`), and
-   is escaped wherever it is rendered as markup. A url from the API opens only
+   is escaped wherever it is rendered as markup. Text from the instance that
+   reaches a notification body is checked against the daemon's own renderer,
+   not against our escape (the vendored `Markup.render` in
+   `test/vendor/omarchy-notifications/`). A url from the API opens only
    on the API's own origin (scheme, host and port), and never with a control
    character in it. A notification's words go
    to the daemon over D-Bus from stdin, not on a command line.
@@ -279,6 +282,13 @@ at the call catches the next variant.
    `inputs.*` value is read through `env:`, never inside a `run:` line. Each
    `uses:` is pinned to a commit or a tag.
    Check: [`test/test_workflows.py`](../../test/test_workflows.py).
+12. **What the shell keeps across polls has a bound.**
+   Any map or list the shell keeps from one poll to the next, keyed by data
+   from the instance (row keys, run ids), has a size bound that does not depend
+   on how long the shell runs or how many ids the instance makes up, and a test
+   that drives it past the bound. A cut list cannot say a row is gone, so it is
+   no bound.
+   Check: [`test/test_model.mjs`](../../test/test_model.mjs).
 
 A line marked `pending` has no check yet; the task named there adds it and
 changes the line. `test/test_security_rules.py` fails when a line has neither a
@@ -463,14 +473,26 @@ user's one step, and no package is asked for twice. Each step is a row with its
 evidence, and what the rig cannot prove goes on the *needs the owner's setup*
 list.
 
-**Upgrade.** The live tag's own snooze writer makes the state an older install
-leaves; it is kept as `test/fixtures/snooze-v0.2.0.json` and regenerated only
-when the writer's format changes. The candidate's `snooze get` reads it back
-unchanged, and reading it writes nothing. This checks the state the tag left,
-not the tag's code running an upgrade: a live-tag install in the sandbox is not
-automated yet. Then `dev/loaded-code` checks that the shell answers over IPC
-with the candidate's files: a QML error takes the whole widget off the bar, and
-it can be logged after a quick log check has already passed.
+**Upgrade.** `dev/regression.json` asks for the live tag (`"upgrade_from":
+"live-tag"`), so `dev/regression` gives the run the commit of the latest
+release as a second read-only archive (`dev/sandbox run --base`), and the script
+finds its tree in `$SANDBOX_BASE`. The script installs it as a user does
+(`dev/rig install --tree`), restarts the shell, and has that release's own panel
+snooze through its IPC, so its own writer leaves the state. Then `dev/rig
+upgrade` puts the candidate on the package repo as its next commit and runs
+`omarchy plugin update --yes`, the user's upgrade, and the shell is restarted.
+The rows: the live tag installs at its version; it writes a one-hour snooze;
+the upgrade lands the candidate's version; the upgrade and the candidate's
+start leave the state's bytes as they were; the candidate's `snooze get` prints
+them and its panel reads the snooze (`focus` with Omarchy awake answers the
+mode and writes nothing). A run without the base fails the upgrade row. Then
+`dev/loaded-code` checks that the shell answers over IPC with the installed
+files: a QML error takes the whole widget off the bar, and it can be logged
+after a quick log check has already passed.
+
+The rows *Snooze from the v0.2.0 fixture* and *Snooze read is not a write* read
+`test/fixtures/snooze-v0.2.0.json`, the state the v0.2.0 writer made, and are
+kept while users may still hold it.
 
 Each result is a row of the regression record.
 

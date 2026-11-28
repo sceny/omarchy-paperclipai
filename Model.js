@@ -41,6 +41,13 @@ var DECISION_KINDS = { approval: true, decision: true, issue_thread_interaction:
 // every fifteen minutes must not be able to paper the screen in toasts.
 var MAX_ERROR_TOASTS = 3
 
+// The most row keys the shell remembers as seen. A cut list cannot say a row
+// is gone, so on a busy instance new keys keep coming and none is forgotten;
+// past this many, the keys listed longest ago go first. Four times the largest
+// report the probe writes (100 inbox rows and 25 runs), so a row has to stay
+// out of several full lists before it can speak again.
+var MAX_SEEN_KEYS = 500
+
 // How often the widget reads the instance. Each read asks the server for the
 // attention feed of every company, a heavy query, so the closed bar reads it
 // once a minute; the open panel reads it at least every 20 seconds.
@@ -980,11 +987,12 @@ function diffNotifications(previous, next, level, seen, since) {
 }
 
 // Remembers every row of `next` in `out.seen`; `prune` forgets the rows that
-// are gone, which only a report after a first one can tell.
+// are gone, which only a report after a first one can tell. The map never holds
+// more than MAX_SEEN_KEYS keys, however long the shell runs.
 function markSeen(out, next, prune) {
-  out.seen = mergeKeys(out.seen, keysOf(next.needs, "needs"))
-  out.seen = mergeKeys(out.seen, keysOf(next.moving, "moving"))
+  out.seen = rememberKeys(out.seen, mergeKeys(keysOf(next.needs, "needs"), keysOf(next.moving, "moving")))
   out.seen = forgetHidden(prune ? pruneKeys(out.seen, next) : out.seen, next)
+  out.seen = boundKeys(out.seen, MAX_SEEN_KEYS)
   // The first report starts the cover for the rows it did not list. Once one
   // report has listed every row, every row waiting at the start has been seen,
   // and anything after that is news however old its time.
@@ -1029,19 +1037,36 @@ function neutralizeOption(text) {
   return /^\s*-/.test(s) ? WORD_JOINER + s : s
 }
 
-// The shell draws a notification body as StyledText, so markup in it is markup.
-function escapeMarkup(text) {
+// Omarchy's daemon does not draw a body as it was sent. Its Markup.render
+// decodes entities up to three times, escapes, puts back b i u s em strong br
+// and <a href>, then makes every bare http(s) url a link, and Toast.qml draws
+// that as StyledText. An escape of ours is decoded before it can hold, however
+// many times it is applied. So the body carries nothing that can become a tag
+// or an entity: < and > become look-alikes (U+2039, U+203A), and a word joiner
+// after each & keeps any entity pattern from reading through it, so the & is
+// drawn as written.
+function inertMarkup(text) {
   return String(text === undefined || text === null ? "" : text)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&/g, "&" + WORD_JOINER).replace(/</g, "\u2039").replace(/>/g, "\u203a")
 }
 
-// The summary is drawn as plain text; the body is not.
+// The daemon turns "scheme://" into a link in the body, and Detect.js takes the
+// first http(s) url of summary or body as the card's link, opened on a click
+// that has no command of its own. A word joiner after the colon prints as
+// nothing and no url pattern reads through it.
+function inertUrls(text) {
+  return String(text === undefined || text === null ? "" : text)
+    .replace(/:(?=\s*[\/\\])/g, ":" + WORD_JOINER)
+}
+
+// The summary is drawn as plain text, so only its urls are broken; the body
+// passes through the daemon's renderer.
 function notificationSummary(text) {
-  return neutralizeOption(text)
+  return neutralizeOption(inertUrls(text))
 }
 
 function notificationBody(text) {
-  return neutralizeOption(escapeMarkup(text))
+  return neutralizeOption(inertUrls(inertMarkup(text)))
 }
 
 // What `bin/omarchy-paperclip-notify` reads from stdin. The words never go on a
@@ -1066,6 +1091,36 @@ function mergeKeys(seen, keys) {
   return out
 }
 
+// Each seen key holds the list it came from and the poll that last listed it
+// (`at`, one more than the newest before), so `boundKeys` can tell which keys
+// went unlisted longest. Object order is no guide: a key that looks like a
+// number sorts first.
+function rememberKeys(seen, listed) {
+  var out = {}
+  var tick = 0
+  for (var a in seen) {
+    out[a] = seen[a]
+    if (seenAt(seen[a]) > tick) tick = seenAt(seen[a])
+  }
+  tick++
+  for (var b in listed) out[b] = { list: listed[b], at: tick }
+  return out
+}
+
+function seenAt(entry) {
+  return entry && typeof entry.at === "number" ? entry.at : 0
+}
+
+// Keeps the `max` keys listed most recently and drops the rest.
+function boundKeys(seen, max) {
+  var keys = Object.keys(seen)
+  if (keys.length <= max) return seen
+  keys.sort(function (a, b) { return seenAt(seen[b]) - seenAt(seen[a]) })
+  var out = {}
+  for (var i = 0; i < max; i++) out[keys[i]] = seen[keys[i]]
+  return out
+}
+
 // A cleared row is never counted as seen: when it comes back it is news
 // again, under either inbox filter.
 function forgetHidden(seen, report) {
@@ -1085,11 +1140,11 @@ function pruneKeys(seen, report) {
   var movingWhole = listsEveryRow(report, report.moving, report.working, report.runsStale)
   var out = {}
   for (var key in seen) {
-    var list = seen[key]
+    var list = seen[key] && seen[key].list
     var whole = list === "needs" ? needsWhole
               : list === "moving" ? movingWhole
               : needsWhole && movingWhole
-    if (needs[key] || moving[key] || !whole) out[key] = list
+    if (needs[key] || moving[key] || !whole) out[key] = seen[key]
   }
   return out
 }
@@ -1107,6 +1162,7 @@ if (typeof module !== "undefined" && module.exports) {
     NOTIFY_OFF: NOTIFY_OFF,
     NOTIFY_NEEDED: NOTIFY_NEEDED,
     NOTIFY_ALL: NOTIFY_ALL,
+    MAX_SEEN_KEYS: MAX_SEEN_KEYS,
     INBOX_NEEDS_ME: INBOX_NEEDS_ME,
     INBOX_ALL: INBOX_ALL,
     emptyReport: emptyReport,
@@ -1154,7 +1210,8 @@ if (typeof module !== "undefined" && module.exports) {
     stopConfirmText: stopConfirmText,
     diffNotifications: diffNotifications,
     neutralizeOption: neutralizeOption,
-    escapeMarkup: escapeMarkup,
+    inertMarkup: inertMarkup,
+    inertUrls: inertUrls,
     notificationSummary: notificationSummary,
     notificationBody: notificationBody,
     notificationRequest: notificationRequest,

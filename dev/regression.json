@@ -2,6 +2,7 @@
   "script": "dev/regression.sh",
   "steps": "tests,rig,script",
   "marketplace": true,
+  "upgrade_from": "live-tag",
   "owner_only": [
     {"what": "Notification daemon and Do Not Disturb", "why": "The rig has no owner's notification daemon", "owner": "Checks it on their own desktop"},
     {"what": "Bar and monitors", "why": "The rig has no owner's bar or monitors", "owner": "Checks it on their own desktop"},
